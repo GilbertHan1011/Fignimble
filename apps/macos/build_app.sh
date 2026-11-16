@@ -45,5 +45,13 @@ cat > "$APP/Contents/Info.plist" <<PL
 </array>
 </dict></plist>
 PL
-codesign -s - --force "$APP" >/dev/null 2>&1 || true
+# A "Developer ID Application" identity (release builds, FIGNIMBLE_SIGN_IDENTITY) signs with the hardened runtime and a
+# secure timestamp, as notarization requires; a failure then stops the build. Otherwise an ad-hoc signature.
+SIGN_ID="${FIGNIMBLE_SIGN_IDENTITY:-}"
+if [[ "$SIGN_ID" == "Developer ID Application"* ]]; then
+  codesign -s "$SIGN_ID" --force --options runtime --timestamp --entitlements "$ROOT/Fignimble.entitlements" "$APP"
+  codesign --verify --strict --verbose=2 "$APP"
+else
+  codesign -s - --force "$APP" >/dev/null 2>&1 || true
+fi
 echo "built $APP ($(lipo -archs "$APP/Contents/MacOS/Fignimble"))"
