@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="200" viewBox="0 0 240 200">
+  <rect x="10" y="60" width="70" height="80" rx="10" fill="#e8f1f2" stroke="#00798c" stroke-width="2"/>
+  <text x="45" y="105" font-family="Helvetica" font-size="14" text-anchor="middle">Cell</text>
+  <circle cx="180" cy="100" r="40" fill="#fbe3e6" stroke="#d1495b" stroke-width="2"/>
+  <text x="180" y="105" font-family="Helvetica" font-size="14" text-anchor="middle">Nucleus</text>
+  <path d="M85 100 L128 100" stroke="#333" stroke-width="2"/>
+  <path d="M138 100 L126 94 L126 106 Z" fill="#333"/>
+</svg>

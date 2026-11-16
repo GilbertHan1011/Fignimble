@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+.fignimble/
+.pytest_cache/
+apps/macos/.build/
+apps/macos/Fignimble.app/
+*.egg-info/
+*.zip
+.DS_Store

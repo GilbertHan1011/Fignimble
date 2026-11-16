@@ -1,0 +1,1571 @@
+"""The engine behind the editor: renders figures in a worker process, turns canvas edits into source edits, keeps
+the undo history, and watches the project for changes made by an agent or another editor.
+
+The undo model is Manimble's (github.com/pachterlab/Manimble, engine/manimble/core.py): every edit stores each file
+before and after; undoing an edit when the file has changed since (an agent wrote to it) puts back only that edit's
+own lines, by a three-way merge, and refuses when the same lines changed.
+"""
+
+from __future__ import annotations
+
+import ast
+import difflib
+import re
+import json
+import os
+import queue
+import shutil
+import subprocess
+import sys
+import threading
+import time
+from pathlib import Path
+
+from . import srcedit, templates
+from .render import SKIP_DIRS, is_figure_source
+from .srcedit import REMOVE, EditError, Raw, Source
+
+ENGINE_ROOT = str(Path(__file__).resolve().parent.parent)
+GEOMETRY = {"panel": ("x", "y"), "image": ("x", "y"), "text": ("x", "y"), "rect": ("x", "y"),
+            "ellipse": ("x", "y"), "line": ("x1", "y1", "x2", "y2"), "bracket": ("x1", "x2", "y"),
+            "layout": ("x", "y"), "legend": ("x", "y")}
+METHOD_KIND = {"panel": "panel", "image": "image", "text": "text", "line": "line", "arrow": "line", "rect": "rect",
+               "ellipse": "ellipse", "bracket": "bracket", "layout": "layout", "legend": "legend", "path": "path"}
+BOXED = ("panel", "image", "rect", "ellipse", "layout")
+INSET_KEYS = {"x", "y", "w", "h", "label", "group", "name"}
+
+
+def log(*a):
+    print("[fignimble]", *a, file=sys.stderr, flush=True)
+
+
+class WorkerProc:
+    """The render worker process (fignimble.worker): one request at a time, restarted if it dies or hangs."""
+
+    def __init__(self, python: str):
+        self.python = python
+        self.proc: subprocess.Popen | None = None
+        self.lines: queue.Queue = queue.Queue()
+        self.lock = threading.Lock()
+        self.n = 0
+
+    def _start(self):
+        env = dict(os.environ, PYTHONPATH=ENGINE_ROOT + os.pathsep + os.environ.get("PYTHONPATH", ""),
+                   PYTHONUNBUFFERED="1", MPLBACKEND="Agg", PYTHONDONTWRITEBYTECODE="1")
+        self.proc = subprocess.Popen([self.python, "-u", "-m", "fignimble.worker"], stdin=subprocess.PIPE,
+                                     stdout=subprocess.PIPE, stderr=sys.stderr, env=env, text=True, bufsize=1)
+        self.lines = queue.Queue()
+        q, out = self.lines, self.proc.stdout
+
+        def pump():
+            for ln in out:
+                q.put(ln)
+            q.put(None)
+        threading.Thread(target=pump, daemon=True).start()
+
+    def request(self, req: dict, timeout: float = 180) -> dict:
+        with self.lock:
+            if self.proc is None or self.proc.poll() is not None:
+                self._start()
+            self.n += 1
+            req = dict(req, id=self.n)
+            try:
+                self.proc.stdin.write(json.dumps(req) + "\n")
+                self.proc.stdin.flush()
+            except (BrokenPipeError, OSError):
+                self.proc = None
+                raise RuntimeError("the render worker stopped; try again") from None
+            deadline = time.time() + timeout
+            while True:
+                try:
+                    ln = self.lines.get(timeout=max(0.05, deadline - time.time()))
+                except queue.Empty:
+                    self.kill()
+                    raise RuntimeError(f"rendering took longer than {timeout:.0f} s and was stopped "
+                                       "(a panel's code may loop forever)") from None
+                if ln is None:
+                    self.proc = None
+                    raise RuntimeError("the render worker crashed (see ~/Library/Logs/fignimble.log)")
+                msg = json.loads(ln)
+                if msg.get("id") != req["id"]:
+                    continue
+                if "error" in msg:
+                    raise RuntimeError(msg["error"])
+                return msg["result"]
+
+    def kill(self):
+        if self.proc and self.proc.poll() is None:
+            self.proc.kill()
+        self.proc = None
+
+    def close(self):
+        if self.proc and self.proc.poll() is None:
+            try:
+                self.proc.stdin.close()
+                self.proc.wait(timeout=2)
+            except Exception:                            # noqa: BLE001
+                self.proc.kill()
+
+
+class UndoConflict(Exception):
+    """Undo or redo would overwrite lines changed since (by an agent, another editor): the files it names."""
+
+
+def _merge3(base: bytes, ours: bytes, theirs: bytes) -> bytes | None:
+    """`ours` (the file as it is now) with the changes that take `base` to `theirs` (what undo or redo wants)
+    applied line by line; None when a change meets lines that changed since `base`. (From Manimble.)"""
+    b, o, t = (x.decode("utf-8").splitlines(keepends=True) for x in (base, ours, theirs))
+    ops = difflib.SequenceMatcher(None, b, o, autojunk=False).get_opcodes()
+    mine = [op for op in ops if op[0] != "equal"]
+    equal = [op for op in ops if op[0] == "equal"]
+
+    def where(i: int) -> int | None:
+        for _, i1, i2, j1, _ in equal:
+            if i1 <= i < i2:
+                return j1 + i - i1
+        return len(o) if i == len(b) and not any(i1 == len(b) for _, i1, _, _, _ in mine) else None
+
+    out, at = [], 0
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, b, t, autojunk=False).get_opcodes():
+        if tag == "equal":
+            continue
+        if any(m1 < max(i2, i1 + 1) and i1 < max(m2, m1 + 1) for _, m1, m2, _, _ in mine):
+            return None
+        start = where(i1)
+        if start is None or start < at:
+            return None
+        if any(where(i) != start + i - i1 for i in range(i1, i2)):
+            return None
+        out += o[at:start] + t[j1:j2]
+        at = start + (i2 - i1)
+    out += o[at:]
+    return "".join(out).encode("utf-8")
+
+
+class Plan:
+    """Patches to several files, made from one parse of each, applied together as one undo step."""
+
+    def __init__(self):
+        self.sources: dict[str, Source] = {}
+        self.patches: dict[str, list] = {}
+        self.inserted: dict[str, list[int]] = {}       # file -> lines (after the edit) where new statements start
+
+    def source(self, path: str) -> Source:
+        if path not in self.sources:
+            self.sources[path] = Source(Path(path).read_text(encoding="utf-8"), path)
+        return self.sources[path]
+
+    def add(self, path: str, patches: list):
+        self.source(path)
+        lst = self.patches.setdefault(path, [])
+        for p in patches:
+            lst[:] = [q for q in lst if (q[0], q[1]) != (p[0], p[1]) or q[0] == q[1]]
+            lst.append(p)
+
+    def texts(self) -> dict[str, tuple[str, str]]:
+        out = {}
+        for path, patches in self.patches.items():
+            src = self.sources[path]
+            new = srcedit.apply(src.text, patches)
+            if new != src.text:
+                try:
+                    ast.parse(new)
+                except SyntaxError as exc:
+                    raise EditError(f"the edit would break {Path(path).name} (line {exc.lineno}: {exc.msg}); "
+                                    "nothing was changed") from None
+                out[path] = (src.text, new)
+        return out
+
+
+class Session:
+    def __init__(self, project: str, python: str | None = None):
+        self.project = Path(project).resolve()
+        if not self.project.is_dir():
+            raise FileNotFoundError(f"no folder {self.project}")
+        self.cache = self.project / ".fignimble"
+        self.cache.mkdir(exist_ok=True)
+        self.worker = WorkerProc(python or sys.executable)
+        self.history: list[dict] = []
+        self.redo: list[dict] = []
+        self.renders: dict[str, tuple] = {}            # figure -> (fingerprint, pxPerMM, result)
+        self.render_lock = threading.Lock()
+        self.edit_lock = threading.RLock()
+        self.on_event = None
+        self.closed = False
+        self.current: str | None = None
+        self.dark = False                              # the editor shows the figures' dark versions
+        self._sig = self.fingerprint()
+        self.agent_files = templates.write_agent_files(self.project)
+        threading.Thread(target=self._watch, daemon=True).start()
+
+    def close(self):
+        self.closed = True
+        templates.remove_agent_files(self.project, self.agent_files)
+        self.worker.close()
+
+    def emit(self, ev: dict):
+        if self.on_event:
+            self.on_event(ev)
+
+    # --- files ---
+
+    def fingerprint(self) -> str:
+        items = []
+        for dirpath, dirs, files in os.walk(self.project):
+            dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith(".")]
+            for f in files:
+                if f in templates.AGENT_FILES:
+                    continue
+                try:
+                    st = os.stat(os.path.join(dirpath, f))
+                except OSError:
+                    continue
+                items.append((dirpath, f, st.st_mtime_ns, st.st_size))
+        items.sort()
+        return str(hash(tuple(items)))
+
+    def figures(self) -> list[dict]:
+        out = []
+        for p in sorted(self.project.glob("*.py"), key=lambda p: _natural(p.stem)):
+            try:
+                if is_figure_source(p.read_text(encoding="utf-8", errors="replace")):
+                    out.append({"name": p.stem, "file": str(p)})
+            except OSError:
+                pass
+        return out
+
+    def figure_file(self, name: str) -> str:
+        p = self.project / f"{name}.py"
+        if not p.exists():
+            raise EditError(f"there is no figure {name}")
+        return str(p)
+
+    def panel_files(self) -> list[str]:
+        out = []
+        for p in sorted(self.project.rglob("*.py")):
+            rel = p.relative_to(self.project)
+            if any(part in SKIP_DIRS or part.startswith(".") for part in rel.parts[:-1]):
+                continue
+            try:
+                t = p.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            if not is_figure_source(t) and "def " in t and p.name != "style.py":
+                out.append(str(rel))
+        return out
+
+    def _watch(self):
+        """Notice edits made outside the editor (an agent, a text editor) and re-render."""
+        last_bg = 0.0
+        while not self.closed:
+            time.sleep(0.8)
+            try:
+                sig = self.fingerprint()
+            except Exception:                            # noqa: BLE001
+                continue
+            if sig != self._sig:
+                self._sig = sig
+                self.emit({"event": "changed"})
+            elif time.time() - last_bg > 1.5:
+                last_bg = time.time()
+                self._render_background()
+
+    def _render_background(self):
+        """Keep the other figures' thumbnails current while nothing else happens."""
+        for f in self.figures():
+            if self.closed or f["name"] == self.current:
+                continue
+            got = self.renders.get(f["name"])
+            if got and got[0] == self._sig:
+                continue
+            if self.render_lock.locked():
+                return
+            try:
+                self.render(f["name"], (got[1] if got else 4.0))
+                self.emit({"event": "rendered", "figure": f["name"]})
+            except Exception as exc:                      # noqa: BLE001
+                log("background render", f["name"], exc)
+            return
+
+    # --- rendering ---
+
+    def render(self, name: str, px: float | None = None, force: bool = False, dark: bool | None = None) -> dict:
+        """A figure's render, from the cache when nothing changed. `dark`: its dark version (default: the version
+        the editor shows)."""
+        px = float(px or 12.0)
+        dark = self.dark if dark is None else bool(dark)
+        with self.render_lock:
+            sig = self.fingerprint()
+            got = self.renders.get(name)
+            if got and not force and got[0] == sig and got[1] == px and got[2].get("dark", False) == dark:
+                return got[2]
+            res = self.worker.request({"cmd": "render", "project": str(self.project), "cache": str(self.cache),
+                                       "file": self.figure_file(name), "pxPerMM": px, "dark": dark})
+            self.renders[name] = (sig, px, res)
+            return res
+
+    def api_state(self) -> dict:
+        figs = []
+        for f in self.figures():
+            got = self.renders.get(f["name"])
+            r = got[2] if got else {}
+            figs.append({**f, "thumb": r.get("thumb"), "error": r.get("error"),
+                         "warnings": len([w for w in r.get("warnings", []) if w["level"] != "info"])})
+        return {"project": str(self.project), "figures": figs, "canUndo": bool(self.history),
+                "canRedo": bool(self.redo), "undoLabel": self.history[-1]["label"] if self.history else None,
+                "redoLabel": self.redo[-1]["label"] if self.redo else None, "panels": self.panel_files(),
+                "history": [e["label"] for e in self.history], "future": [e["label"] for e in reversed(self.redo)],
+                "agentFiles": self.agent_files}
+
+    def api_figure(self, a: dict) -> dict:
+        self.current = a["name"]
+        if "dark" in a:
+            self.dark = bool(a["dark"])
+        return self.render(a["name"], a.get("pxPerMM"))
+
+    # --- undo ---
+
+    def _write(self, texts: dict[str, tuple[str, str]], label: str):
+        written = {}
+        for path, (before, after) in texts.items():
+            Path(path).write_text(after, encoding="utf-8")
+            written[path] = (before.encode(), after.encode())
+        if written:
+            self.history.append({"label": label, "files": written})
+            self.redo.clear()
+            self._sig = self.fingerprint()
+
+    def _restore(self, written: dict, which: int) -> dict:
+        plan, clash = {}, []
+        for path, pair in written.items():
+            target, expected = pair[which], pair[1 - which]
+            try:
+                current = Path(path).read_bytes()
+            except FileNotFoundError:
+                current = None
+            if current in (expected, target):
+                plan[path] = target
+                continue
+            merged = None
+            if None not in (target, expected, current):
+                try:
+                    merged = _merge3(expected, current, target)
+                    if merged is not None and path.endswith(".py"):
+                        ast.parse(merged)
+                except (UnicodeDecodeError, SyntaxError, ValueError):
+                    merged = None
+            if merged is None:
+                clash.append(Path(path).name)
+            else:
+                plan[path] = merged
+        if clash:
+            raise UndoConflict(clash)
+        for path, data in plan.items():
+            if data is None:
+                Path(path).unlink(missing_ok=True)
+            else:
+                Path(path).write_bytes(data)
+        self._sig = self.fingerprint()
+        return plan
+
+    def undo(self, a: dict) -> dict:
+        with self.edit_lock:
+            if not self.history:
+                return {"ok": False, "error": "nothing to undo"}
+            e = self.history.pop()
+            try:
+                self._restore(e["files"], 0)
+            except UndoConflict as exc:
+                return {"ok": False, "error": f"Can't undo {e['label']}: {', '.join(exc.args[0])} changed since on the "
+                                              "same lines (an agent or another editor), so it was left as it is."}
+            self.redo.append(e)
+            return {"ok": True, "label": e["label"], **self._after(a.get("figure"), a.get("pxPerMM"))}
+
+    def undo_to(self, a: dict) -> dict:
+        """Undo until `n` steps of history are left (redo, the other way)."""
+        n = int(a["n"])
+        last = {}
+        while len(self.history) > n:
+            last = self.undo({"figure": None})
+            if not last.get("ok"):
+                return {**last, **self._after(a.get("figure"), a.get("pxPerMM"))}
+        while len(self.history) < n and self.redo:
+            last = self.redo_({"figure": None})
+            if not last.get("ok"):
+                return {**last, **self._after(a.get("figure"), a.get("pxPerMM"))}
+        return {"ok": True, **self._after(a.get("figure"), a.get("pxPerMM"))}
+
+    def redo_(self, a: dict) -> dict:
+        with self.edit_lock:
+            if not self.redo:
+                return {"ok": False, "error": "nothing to redo"}
+            e = self.redo.pop()
+            try:
+                self._restore(e["files"], 1)
+            except UndoConflict as exc:
+                return {"ok": False, "error": f"Can't redo {e['label']}: {', '.join(exc.args[0])} changed since."}
+            self.history.append(e)
+            return {"ok": True, "label": e["label"], **self._after(a.get("figure"), a.get("pxPerMM"))}
+
+    def _after(self, name: str | None, px=None, select_lines: dict | None = None) -> dict:
+        if not name:
+            return {}
+        try:
+            fig = self.render(name, px)
+        except Exception as exc:                         # noqa: BLE001
+            return {"renderError": str(exc)}
+        out = {"figure": fig}
+        if select_lines:
+            sel = []
+            for info in fig.get("elements", []):
+                s = info.get("site") or {}
+                if s.get("line") in select_lines.get(s.get("file"), []):
+                    sel.append(info["oid"])
+            out["select"] = sel
+        return out
+
+    # --- editing source directly ---
+
+    def write_source(self, a: dict) -> dict:
+        """The code editor saved a file."""
+        path = str(Path(a["file"]).resolve())
+        if not path.startswith(str(self.project) + os.sep):
+            return {"ok": False, "error": "that file is not in the project"}
+        with self.edit_lock:
+            before = Path(path).read_text(encoding="utf-8") if Path(path).exists() else ""
+            if before != a["text"]:
+                self._write({path: (before, a["text"])}, f"Edit {Path(path).name}")
+            return {"ok": True, **self._after(a.get("figure"), a.get("pxPerMM"))}
+
+    # --- canvas edits ---
+
+    def edit(self, a: dict) -> dict:
+        name = a["figure"]
+        with self.edit_lock:
+            data = self.render(name, a.get("pxPerMM"))
+            if data.get("error"):
+                return {"ok": False, "error": "the figure's code doesn't run; fix it first:\n" + data["error"]}
+            plan = Plan()
+            op = a["op"]
+            try:
+                label = getattr(self, f"_op_{op}")(plan, data, a)
+                texts = plan.texts()
+            except (EditError, KeyError, ValueError) as exc:
+                return {"ok": False, "error": str(exc).strip("'\"")}
+            if not texts:
+                return {"ok": True, "unchanged": True, "figure": data}
+            self._write(texts, label)
+            # where the new statements are now, to select what they make
+            lines = {}
+            for path, ins in plan.inserted.items():
+                lines[path] = ins
+            res = {"ok": True, **self._after(name, a.get("pxPerMM"), lines or None)}
+            fig = res.get("figure", {})
+            if fig.get("error"):
+                # the edit broke the figure (it shouldn't): take it back
+                e = self.history.pop()
+                self._restore(e["files"], 0)
+                return {"ok": False, "error": "that edit made the figure fail, so it was undone:\n" + fig["error"],
+                        **self._after(name, a.get("pxPerMM"))}
+            return res
+
+    # helpers
+
+    @staticmethod
+    def _info(data: dict, oid: str) -> dict:
+        for i in data["elements"] + data["labels"]:
+            if i["oid"] == str(oid):
+                return i
+        raise EditError(f"no element {oid} (the figure changed; try again)")
+
+    @staticmethod
+    def _who(data: dict, info: dict) -> str:
+        if info["kind"] == "label":
+            return f"label {info['text']}"
+        lab = next((l["text"] for l in data["labels"] if l["panel"] == info["oid"]), None)
+        if lab:
+            return f"panel {lab}"
+        if info["kind"] == "text":
+            return f"text “{info['props']['text'][:20]}”"
+        return f"the {info['method']}"
+
+    def _call(self, plan: Plan, data: dict, info: dict):
+        site = info.get("site")
+        if not site or not site.get("file"):
+            raise EditError(f"can't tell which code made {self._who(data, info)}")
+        src = plan.source(site["file"])
+        call = src.find_call(site, info["method"])
+        if call is None:
+            raise EditError(f"can't find the code of {self._who(data, info)} ({Path(site['file']).name} line "
+                            f"{site['line']}); was the file changed? Try again")
+        if sum(1 for e in data["elements"] if e.get("site") == site and e["method"] == info["method"]) > 1:
+            raise EditError(f"{self._who(data, info)} is made by a loop ({Path(site['file']).name} line {site['line']}), "
+                            "together with others; change it in the code")
+        return src, call
+
+    def _set(self, plan: Plan, data: dict, info: dict, updates: dict):
+        src, call = self._call(plan, data, info)
+        plan.add(src.path, srcedit.set_args(src, call, info["method"], updates, self._who(data, info)))
+
+    def _top(self, data, oids) -> list[str]:
+        """The elements themselves for panels inside a layout: the layout (moving one moves it)."""
+        out = []
+        for oid in oids:
+            info = self._info(data, oid)
+            top = info.get("parent") or info["oid"]
+            if top not in out:
+                out.append(top)
+        return out
+
+    def _host_box(self, data, info):
+        h = info.get("host")
+        if h is None:
+            raise EditError("can't find the panel this inset is in")
+        return self._info(data, h)["box"]
+
+    def _panel_of(self, data, oid):
+        info = self._info(data, oid)
+        return self._info(data, info["panel"]) if info["kind"] == "label" else info
+
+    # ops: each adds patches to the plan and returns the undo label
+
+    def _op_set(self, plan, data, a):
+        """Change arguments of one element: {oid, props}."""
+        info = self._info(data, a["oid"])
+        props = {k: (REMOVE if (v is None and k in ("label_dx", "label_dy", "group", "name", "crop", "font", "flip",
+                                                    "width", "texts", "colors"))
+                     or (v is False and k in ("locked", "hidden")) else v)
+                 for k, v in a["props"].items()}
+        if info["kind"] == "label":
+            panel = self._info(data, info["panel"])
+            upd = {}
+            if "text" in props:
+                upd["label"] = props["text"] if props["text"] not in ("", None) else "auto"
+            self._set(plan, data, panel, upd)
+            return "Change Label"
+        if info["kind"] == "inset":
+            own = {k: v for k, v in props.items() if k in INSET_KEYS}
+            item = {k: v for k, v in props.items() if k not in INSET_KEYS}
+            if own:
+                self._set(plan, data, info, own)
+            if item:
+                self._set(plan, data, {**info, "site": info["itemSite"], "method": info["itemMethod"]}, item)
+            return "Change Inset"
+        if info["kind"] == "legend" and info.get("parent"):
+            raise EditError("this legend is collected from the layout's panels; change the panels' legends, or "
+                            "the layout's guides")
+        self._set(plan, data, info, props)
+        return "Change " + ", ".join(sorted(props))[:40]
+
+    def _op_move(self, plan, data, a):
+        """Move elements by (dx, dy) mm: {oids, dx, dy, labels?: "all"}."""
+        dx, dy = float(a.get("dx", 0)), float(a.get("dy", 0))
+        moved_all_labels = False
+        labels = [o for o in a["oids"] if self._info(data, o)["kind"] == "label"]
+        for oid in labels + self._top(data, [o for o in a["oids"] if o not in labels]):
+            info = self._info(data, oid)
+            if info["kind"] == "inset":
+                hx, hy, hw, hh = self._host_box(data, info)
+                p = info["props"]
+                upd = {k: p[k] + d / size for k, d, size in (("x", dx, hw), ("y", dy, hh)) if d and size}
+                if upd:
+                    self._set(plan, data, info, {k: round(v, 4) for k, v in upd.items()})
+                continue
+            if info["kind"] == "path":
+                self._set(plan, data, info, {"points": [(round(x + dx, 2), round(y + dy, 2))
+                                                        for x, y in info["props"]["points"]]})
+                continue
+            if info["kind"] == "zoom":
+                sx, sy, sw, sh = self._info(data, info["source"])["box"] if info.get("source") else (0, 0, 1, 1)
+                sw, sh = (info.get("sourceBox") or [sx, sy, sw, sh])[2:]
+                rx, ry, rw, rh = info["props"]["region"]
+                self._set(plan, data, info, {"region": (round(rx + dx / sw, 4), round(ry + dy / sh, 4), rw, rh)})
+                continue
+            if info["kind"] == "scalebar":
+                bx, by = info["anchor"]
+                d = info["dest"]
+                self._set(plan, data, info, {"x": round((bx + dx - d[0]) / d[2], 4),
+                                             "y": round((by + dy - d[1]) / d[3], 4)})
+                continue
+            if info["kind"] == "label":
+                if a.get("labels") == "all":
+                    if not moved_all_labels:
+                        self._label_style(plan, data, {"dx": data["labelStyle"]["props"]["dx"] + dx,
+                                                       "dy": data["labelStyle"]["props"]["dy"] + dy})
+                        moved_all_labels = True
+                    continue
+                panel = self._info(data, info["panel"])
+                p = panel["props"]
+                upd = {k: (p.get(k) or 0) + d for k, d in (("label_dx", dx), ("label_dy", dy)) if d}
+                self._set(plan, data, panel, {k: (REMOVE if abs(v) < 0.005 else v) for k, v in upd.items()})
+                continue
+            p = info["props"]
+            # only the coordinates that change, so a computed y doesn't stop a sideways move
+            upd = {k: p[k] + (dy if k.startswith("y") else dx) for k in GEOMETRY.get(info["kind"], ())
+                   if (dy if k.startswith("y") else dx)}
+            if upd:
+                self._set(plan, data, info, upd)
+        return "Move Labels" if moved_all_labels else "Move"
+
+    def _op_resize(self, plan, data, a):
+        """Give an element a new box: {oid, box: [x, y, w, h], keepAspect?}."""
+        info = self._info(data, a["oid"])
+        x, y, w, h = (float(v) for v in a["box"])
+        k = info["kind"]
+        if info.get("parent"):
+            raise EditError("a panel in a layout gets its size from the layout: drag the gaps between panels, "
+                            "or resize the layout's frame")
+        if k == "inset":
+            hx, hy, hw, hh = self._host_box(data, info)
+            self._set(plan, data, info, {"x": round((x - hx) / hw, 4), "y": round((y - hy) / hh, 4),
+                                         "w": round(w / hw, 4), "h": round(h / hh, 4)})
+            return "Resize"
+        if k == "zoom":
+            sx, sy, sw, sh = info["sourceBox"]
+            self._set(plan, data, info, {"region": (round((x - sx) / sw, 4), round((y - sy) / sh, 4),
+                                                    round(w / sw, 4), round(h / sh, 4))})
+            return "Resize Zoom"
+        if k == "path":
+            ox, oy, ow, oh = info["box"]
+            pts = [(round(x + (px - ox) * (w / ow if ow else 1), 2), round(y + (py - oy) * (h / oh if oh else 1), 2))
+                   for px, py in info["props"]["points"]]
+            self._set(plan, data, info, {"points": pts})
+            return "Resize"
+        if k == "image" and info["props"].get("h") is None and not a.get("free"):
+            self._set(plan, data, info, {"x": x, "y": y, "w": w})
+        elif k in BOXED:
+            self._set(plan, data, info, {"x": x, "y": y, "w": w, "h": h})
+        elif k == "text":
+            ox, oy, ow, oh = info["box"]
+            size = info["props"].get("size") or data["style"]["props"]["size"]
+            ratio = h / oh if oh > 0 else 1
+            align = info["props"].get("align", "left")
+            ax = {"left": x, "center": x + w / 2, "right": x + w}.get(align, x)
+            self._set(plan, data, info, {"size": round(size * ratio * 4) / 4, "x": ax, "y": y})
+        elif k == "bracket":
+            self._set(plan, data, info, {"x1": x, "x2": x + w})
+        else:
+            raise EditError(f"a {k} can't be resized that way")
+        return "Resize"
+
+    def _op_endpoints(self, plan, data, a):
+        info = self._info(data, a["oid"])
+        self._set(plan, data, info, {k: float(a[k]) for k in ("x1", "y1", "x2", "y2") if k in a})
+        return "Move Line End"
+
+    def _op_delete(self, plan, data, a):
+        stmts = {}
+        for oid in a["oids"]:
+            info = self._info(data, oid)
+            if info["kind"] == "label":
+                self._set(plan, data, self._info(data, info["panel"]), {"label": None})
+                continue
+            if info.get("parent"):
+                parent = self._info(data, info["parent"])
+                if info["kind"] == "legend":
+                    self._set(plan, data, parent, {"guides": REMOVE})
+                    continue
+                if any(self._info(data, o)["oid"] == parent["oid"] for o in a["oids"]):
+                    continue
+                raise EditError(f"{self._who(data, info)} is part of a layout; take it out of the layout's code "
+                                f"({Path(parent['site']['file']).name} line {parent['site']['line']}), or delete the "
+                                "whole layout")
+            src, call = self._call(plan, data, info)
+            st = src.statement(call)
+            used = srcedit.names_used_after(src, st)
+            if used:
+                n, ln = used[0]
+                raise EditError(f"{self._who(data, info)} is used by later code ({n}, line {ln}); delete that first")
+            stmts[(src.path, st.lineno)] = (src, st)
+        for (path, _), (src, st) in stmts.items():
+            a0, b0 = src.stmt_span(st)
+            plan.add(path, [(a0, b0, "")])
+        return "Delete"
+
+    def _op_duplicate(self, plan, data, a):
+        """Copies of elements, offset by (dx, dy): {oids, dx?, dy?}."""
+        dx, dy = float(a.get("dx", 4)), float(a.get("dy", 4))
+        per_file = {}
+        for oid in self._top(data, [o for o in a["oids"] if self._info(data, o)["kind"] != "label"]):
+            info = self._info(data, oid)
+            if info["kind"] == "label":
+                continue
+            src, call = self._call(plan, data, info)
+            st = src.statement(call)
+            text = src.seg(call)
+            copy = Source(text, src.path)
+            ccall = next(n for n in ast.walk(copy.tree) if isinstance(n, ast.Call))
+            p = info["props"]
+            upd = {k: p[k] + (dy if k.startswith("y") else dx) for k in GEOMETRY.get(info["kind"], ())}
+            if info["kind"] == "inset":
+                hx, hy, hw, hh = self._host_box(data, info)
+                upd = {"x": round(p["x"] + dx / hw, 4), "y": round(p["y"] + dy / hh, 4)}
+            if p.get("name"):
+                upd["name"] = REMOVE
+            new = srcedit.apply(text, srcedit.set_args(copy, ccall, info["method"], upd, self._who(data, info)))
+            per_file.setdefault(src.path, []).append((src, st, src.indent(st) + new + "\n"))
+        for path, items in per_file.items():
+            src = items[0][0]
+            # after the last statement of the selection, in selection order
+            last = max(items, key=lambda t: t[1].end_lineno)[1]
+            _, end = src.stmt_span(last)
+            block = "".join(t[2] for t in sorted(items, key=lambda t: t[1].lineno))
+            plan.add(path, [(end, end, block)])
+            first = src.text[:end].count("\n") + 1
+            plan.inserted[path] = list(range(first, first + block.count("\n")))
+        return "Duplicate"
+
+    def _element_stmts(self, src: Source, data: dict):
+        """The statements of this file that make elements, by block."""
+        out = {}
+        for info in data["elements"]:
+            s = info.get("site") or {}
+            if s.get("file") != src.path or info.get("parent"):
+                continue
+            call = src.find_call(s, info["method"])
+            if call is None:
+                continue
+            try:
+                st = src.statement(call)
+            except EditError:
+                continue
+            out[id(st)] = (st, info["oid"])
+        return out
+
+    def _op_order(self, plan, data, a):
+        """Stacking order: {oids, how: front|back|forward|backward}. The order of the calls is the drawing order."""
+        how = a["how"]
+        files = {}
+        for oid in self._top(data, a["oids"]):
+            info = self._info(data, oid)
+            if info["kind"] == "label":
+                continue
+            src, call = self._call(plan, data, info)
+            files.setdefault(src.path, (src, set()))[1].add(id(src.statement(call)))
+        for path, (src, chosen) in files.items():
+            stm = self._element_stmts(src, data)
+            first = stm[next(iter(chosen))][0]
+            block = src.block_of(first)
+            order = [st for st in block if id(st) in stm]
+            if not all(any(id(st) == c for st in order) for c in chosen):
+                raise EditError("those elements are made in different parts of the code; reorder them there")
+            sel = [st for st in order if id(st) in chosen]
+            rest = [st for st in order if id(st) not in chosen]
+            if how == "front":
+                new = rest + sel
+            elif how == "back":
+                new = sel + rest
+            else:
+                new = list(order)
+                rng = range(len(new) - 2, -1, -1) if how == "forward" else range(1, len(new))
+                for i in rng:
+                    j = i + 1 if how == "forward" else i - 1
+                    if id(new[i]) in chosen and id(new[j]) not in chosen:
+                        new[i], new[j] = new[j], new[i]
+            if [id(s) for s in new] == [id(s) for s in order]:
+                continue
+            texts = {}
+            for st in order:
+                a0, b0 = src.stmt_span(st)
+                texts[id(st)] = src.text[a0:b0]
+            plan.add(path, [(*src.stmt_span(old), texts[id(nw)]) for old, nw in zip(order, new)])
+        return {"front": "Bring to Front", "back": "Send to Back", "forward": "Bring Forward",
+                "backward": "Send Backward"}[how]
+
+    def _boxes(self, data, oids):
+        out = []
+        for oid in self._top(data, [o for o in oids if self._info(data, o)["kind"] != "label"]):
+            info = self._info(data, oid)
+            if info["kind"] != "label":
+                out.append((oid, info["box"]))
+        return out
+
+    def _op_align(self, plan, data, a):
+        """{oids, how: left|hcenter|right|top|vcenter|bottom, to: selection|figure|key, key?}"""
+        how, to = a["how"], a.get("to", "selection")
+        boxes = self._boxes(data, a["oids"])
+        if not boxes:
+            raise EditError("nothing to align")
+        if to == "figure":
+            X0, Y0, X1, Y1 = 0, 0, data["size"][0], data["size"][1]
+        elif to == "key" and a.get("key") is not None:
+            kx, ky, kw, kh = self._info(data, a["key"])["box"]
+            X0, Y0, X1, Y1 = kx, ky, kx + kw, ky + kh
+        else:
+            if len(boxes) < 2:
+                raise EditError("select two or more elements to align them to each other (or align to the figure)")
+            X0 = min(b[0] for _, b in boxes)
+            Y0 = min(b[1] for _, b in boxes)
+            X1 = max(b[0] + b[2] for _, b in boxes)
+            Y1 = max(b[1] + b[3] for _, b in boxes)
+        for oid, (x, y, w, h) in boxes:
+            dx = dy = 0.0
+            if how == "left":
+                dx = X0 - x
+            elif how == "right":
+                dx = X1 - (x + w)
+            elif how == "hcenter":
+                dx = (X0 + X1) / 2 - (x + w / 2)
+            elif how == "top":
+                dy = Y0 - y
+            elif how == "bottom":
+                dy = Y1 - (y + h)
+            elif how == "vcenter":
+                dy = (Y0 + Y1) / 2 - (y + h / 2)
+            if abs(dx) > 1e-6 or abs(dy) > 1e-6:
+                self._op_move(plan, data, {"oids": [oid], "dx": dx, "dy": dy})
+        return "Align"
+
+    def _op_distribute(self, plan, data, a):
+        """Equal gaps between the elements: {oids, axis: h|v, gap?} (a fixed gap in mm, if given)."""
+        h = a.get("axis", "h") == "h"
+        boxes = sorted(self._boxes(data, a["oids"]), key=lambda t: t[1][0] if h else t[1][1])
+        if len(boxes) < 2 or (len(boxes) < 3 and a.get("gap") is None):
+            raise EditError("select three or more elements to distribute (or give a gap)")
+        i0, i1 = (0, 2) if h else (1, 3)
+        start = boxes[0][1][i0]
+        if a.get("gap") is not None:
+            gap = float(a["gap"])
+        else:
+            span = boxes[-1][1][i0] + boxes[-1][1][i1] - start
+            gap = (span - sum(b[i1] for _, b in boxes)) / (len(boxes) - 1)
+        at = start
+        for oid, b in boxes:
+            d = at - b[i0]
+            if abs(d) > 1e-6:
+                self._op_move(plan, data, {"oids": [oid], "dx": d if h else 0, "dy": 0 if h else d})
+            at += b[i1] + gap
+        return "Distribute"
+
+    def _op_match(self, plan, data, a):
+        """Make the elements as wide / high as the first: {oids, what: width|height|both}."""
+        boxes = self._boxes(data, a["oids"])
+        if len(boxes) < 2:
+            raise EditError("select the element to match first, then the others")
+        _, (kx, ky, kw, kh) = boxes[0]
+        for oid, (x, y, w, h) in boxes[1:]:
+            info = self._info(data, oid)
+            if info["kind"] not in BOXED:
+                continue
+            nw = kw if a["what"] in ("width", "both") else w
+            nh = kh if a["what"] in ("height", "both") else h
+            if info["kind"] == "image" and info["props"].get("h") is None:
+                if a["what"] == "height":
+                    nw = kh * (w / h if h else 1)
+                self._set(plan, data, info, {"w": nw})
+            else:
+                self._set(plan, data, info, {"w": nw, "h": nh})
+        return "Match Size"
+
+    def _op_divider(self, plan, data, a):
+        """Drag a gap between two rows or columns of a layout: {oid (the layout), index (its dividers'), delta mm}.
+        The tracks on either side change size; the call that sets them gets the new relative sizes."""
+        lay = self._info(data, a["oid"])
+        if lay["kind"] != "layout":
+            lay = self._info(data, lay.get("parent") or a["oid"])
+        d = lay["dividers"][int(a["index"])]
+        if not d.get("editable"):
+            raise EditError("these rows or columns are made with | / + ; give them sizes with Row(..., widths=[...]), "
+                            "Column(..., heights=[...]) or Grid(...) to drag them")
+        sizes = list(d["sizes"])
+        i, delta = d["index"], float(a["delta"])
+        lo = 3.0
+        delta = max(lo - sizes[i], min(delta, sizes[i + 1] - lo))
+        sizes[i] += delta
+        sizes[i + 1] -= delta
+        small = min(sizes)
+        weights = [round(v / small, 2) for v in sizes]
+        site, method = d["site"], d["method"]
+        src = plan.source(site["file"])
+        call = src.find_call(site, method)
+        if call is None:
+            raise EditError("can't find the code of this layout; was the file changed? Try again")
+        plan.add(src.path, srcedit.set_args(src, call, method, {d["param"]: weights}, "the layout"))
+        return "Resize Layout Tracks"
+
+    def _op_make_layout(self, plan, data, a):
+        """Put free panels and pictures into a patchwork layout: {oids, gap?}. Each becomes a Panel(...) or Image(...)
+        named after its file, and fig.layout(Grid(..., ncol=n), x, y, w, h) takes the place of the first, in their
+        reading order, filling the box they covered."""
+        from .render import _reading_order
+        items = [self._info(data, o) for o in self._top(data, a["oids"])]
+        items = [i for i in items if i["kind"] in ("panel", "image") and not i.get("parent")]
+        if len(items) < 2:
+            raise EditError("select two or more panels or pictures (not already in a layout) to lay out")
+        ordered = _reading_order([(i, i["oid"], i["box"]) for i in items])
+        rows, last = [], None
+        for i, _, b in ordered:                          # rows as the reading order found them
+            if last is None or b[1] - last[1] >= min(8.0, 0.4 * max(last[3], 1)):
+                rows.append([])
+                last = b
+            rows[-1].append(i)
+        ncol = max(len(r) for r in rows)
+        x0 = min(i["box"][0] for i in items)
+        y0 = min(i["box"][1] for i in items)
+        x1 = max(i["box"][0] + i["box"][2] for i in items)
+        y1 = max(i["box"][1] + i["box"][3] for i in items)
+        path = data["file"]
+        src = plan.source(path)
+        var = srcedit.figure_var(src)
+        taken = {n.id for n in ast.walk(src.tree) if isinstance(n, ast.Name)}
+        defs, names, first = [], [], None
+        for i, _, _ in ordered:
+            fsrc, call = self._call(plan, data, i)
+            if fsrc.path != path:
+                raise EditError("those panels are made in another file")
+            st = fsrc.statement(call)
+            if srcedit.names_used_after(fsrc, st):
+                raise EditError(f"{self._who(data, i)} is used by later code; lay it out in the code")
+            text = fsrc.seg(call)
+            one = Source(text, path)
+            c1 = next(n for n in ast.walk(one.tree) if isinstance(n, ast.Call))
+            drop = {k: REMOVE for k in ("x", "y", "w", "h", "group")}
+            patches = srcedit.set_args(one, c1, i["method"], drop, self._who(data, i))
+            patches.append((one.start(c1.func), one.end(c1.func), "Panel" if i["kind"] == "panel" else "Image"))
+            text = srcedit.apply(text, patches)
+            stem = Path(str(i["props"].get("source", "panel"))).stem
+            base = "".join(ch if ch.isalnum() else "_" for ch in stem).strip("_").lower() or "panel"
+            if base[0].isdigit():
+                base = "p" + base
+            name, n = base, 1
+            while name in taken:
+                n += 1
+                name = f"{base}{n}"
+            taken.add(name)
+            names.append(name)
+            defs.append(f"{name} = {text}")
+            a0, b0 = fsrc.stmt_span(st)
+            plan.add(path, [(a0, b0, "")])
+            first = a0 if first is None else min(first, a0)
+        gap = float(a.get("gap", 4))
+        lay = (f"{var}.layout(Grid({', '.join(names)}, ncol={ncol}), x={srcedit.fmt(x0)}, y={srcedit.fmt(y0)}, "
+               f"w={srcedit.fmt(x1 - x0)}, h={srcedit.fmt(y1 - y0)}, gap={srcedit.fmt(gap)})")
+        block = "\n".join(defs + [lay]) + "\n"
+        plan.add(path, [(first, first, block)])
+        if "Grid" not in src.text and not re.search(r"^\s*from\s+fignimble\s+import\s+\*", src.text, re.M):
+            raise EditError("this file doesn't import Panel and Grid (add `from fignimble import *`)")
+        line = src.text[:first].count("\n") + 1
+        plan.inserted[path] = list(range(line, line + len(defs) + 1))
+        return "Make Layout"
+
+    def _op_release_layout(self, plan, data, a):
+        """Take the panels out of a layout: each becomes a fig.panel(...) or fig.image(...) where it is now. {oid}"""
+        lay = self._info(data, a["oid"])
+        if lay["kind"] != "layout":
+            lay = self._info(data, lay.get("parent") or a["oid"])
+        src, call = self._call(plan, data, lay)
+        var = srcedit.figure_var(src)
+        st = src.statement(call)
+        lines = []
+        node_names = set()
+        for oid in lay.get("children", []):
+            ch = self._info(data, oid)
+            if ch["kind"] == "legend":
+                continue
+            csrc = plan.source(ch["site"]["file"]) if ch.get("site") else None
+            ccall = csrc.find_call(ch["site"], ch["method"]) if csrc else None
+            if ccall is None:
+                raise EditError(f"can't find the code of {self._who(data, ch)}")
+            text = csrc.seg(ccall)
+            one = Source(text, csrc.path)
+            c1 = next(n for n in ast.walk(one.tree) if isinstance(n, ast.Call))
+            x, y, w, h = ch["box"]
+            meth = "panel" if ch["kind"] == "panel" else "image"
+            patches = srcedit.set_args(one, c1, ch["method"], {"x": round(x, 2), "y": round(y, 2), "w": round(w, 2),
+                                                              "h": round(h, 2)})
+            patches.append((one.start(c1.func), one.end(c1.func), f"{var}.{meth}"))
+            lines.append(src.indent(st) + srcedit.apply(text, patches))
+            try:
+                cst = csrc.statement(ccall)
+                if isinstance(cst, ast.Assign) and csrc.path == src.path:
+                    node_names.update(t.id for t in cst.targets if isinstance(t, ast.Name))
+                    used = [n for n in srcedit.names_used_after(csrc, cst) if n[1] != st.lineno and
+                            not (st.lineno <= n[1] <= st.end_lineno)]
+                    if not used:
+                        a0, b0 = csrc.stmt_span(cst)
+                        plan.add(csrc.path, [(a0, b0, "")])
+            except EditError:
+                pass
+        a0, b0 = src.stmt_span(st)
+        plan.add(src.path, [(a0, b0, "\n".join(lines) + "\n")])
+        return "Release Layout"
+
+    def _name_of(self, plan, data, info) -> str:
+        """The variable a panel or picture is in, naming its line (`cells = fig.image(...)`) if it has none."""
+        if info["kind"] == "label":
+            info = self._info(data, info["panel"])
+        src, call = self._call(plan, data, info)
+        st = src.statement(call)
+        if isinstance(st, ast.Assign) and len(st.targets) == 1 and isinstance(st.targets[0], ast.Name):
+            return st.targets[0].id
+        if not isinstance(st, ast.Expr):
+            raise EditError(f"{self._who(data, info)} needs a name in the code first")
+        stem = Path(str((info.get("item") or info["props"]).get("source", info["kind"]))).stem
+        base = "".join(ch if ch.isalnum() else "_" for ch in stem).strip("_").lower() or info["kind"]
+        if base[0].isdigit():
+            base = "p" + base
+        taken = {n.id for n in ast.walk(src.tree) if isinstance(n, ast.Name)}
+        name, k = base, 1
+        while name in taken:
+            k += 1
+            name = f"{base}{k}"
+        at = src.start(st)
+        plan.add(src.path, [(at, at, f"{name} = ")])
+        return name
+
+    def _append(self, plan, data, line: str):
+        """A statement after the figure file's last element."""
+        src, end, ind = self._insert_point(plan, data)
+        plan.add(src.path, [(end, end, ind + line + "\n")])
+        plan.inserted.setdefault(src.path, []).append(src.text[:end].count("\n") + 1)
+
+    def _op_add_scalebar(self, plan, data, a):
+        """A scale bar on a picture: {oid, props: {length, unit, pixel_size, ...}}."""
+        info = self._info(data, a["oid"])
+        if info["kind"] not in ("image", "inset"):
+            raise EditError("select a picture for the scale bar")
+        name = self._name_of(plan, data, info)
+        var = srcedit.figure_var(plan.source(data["file"]))
+        props = {"length": 50, "unit": "µm", "pixel_size": 1.0, **a.get("props", {})}
+        self._append(plan, data, srcedit.call_text(var, "scalebar", [srcedit.Raw(name)], props))
+        return "Add Scale Bar"
+
+    def _op_add_zoom(self, plan, data, a):
+        """A zoom box: {oids: [source, target]} joins two panels; {oids: [picture]} also makes the magnified view, an
+        inset of the same picture in the picture's corner."""
+        oids = [o for o in a["oids"] if not o.startswith("L")]
+        if not oids:
+            raise EditError("select a picture (or a panel and the one that magnifies it)")
+        src_info = self._info(data, oids[0])
+        sname = self._name_of(plan, data, src_info)
+        var = srcedit.figure_var(plan.source(data["file"]))
+        if len(oids) >= 2:
+            tname = self._name_of(plan, data, self._info(data, oids[1]))
+        else:
+            if src_info["kind"] != "image":
+                raise EditError("select the panel and the one that magnifies it, or one picture")
+            tname = sname + "_zoom"
+            item = srcedit.call_text("", "Image", [src_info["props"]["source"]], {})[1:]
+            self._append(plan, data, f"{tname} = {var}.inset({item}, within={sname}, x=0.6, y=0.6, w=0.38, h=0.38)")
+        self._append(plan, data, srcedit.call_text(var, "zoom", [srcedit.Raw(sname), srcedit.Raw(tname)],
+                                                   {"region": (0.2, 0.2, 0.25, 0.25), "color": "#F2C14E"}))
+        return "Add Zoom"
+
+    def _op_points(self, plan, data, a):
+        """A path's points: {oid, points}."""
+        info = self._info(data, a["oid"])
+        self._set(plan, data, info, {"points": [(round(float(x), 2), round(float(y), 2)) for x, y in a["points"]]})
+        return "Edit Path"
+
+    def _picture_call(self, data, info):
+        """The info whose call holds a picture's settings (an inset's are its Image's)."""
+        if info["kind"] == "inset":
+            return {**info, "site": info["itemSite"], "method": info["itemMethod"], "props": info["item"]}
+        return info
+
+    def _op_crop(self, plan, data, a):
+        """Crop a picture to the part of it now in `box` (mm): {oid, box}. Beyond its edges uncrops."""
+        info = self._info(data, a["oid"])
+        pic = self._picture_call(data, info)
+        p = pic["props"]
+        if info["kind"] not in ("image", "inset") or (info["kind"] == "inset" and info.get("inner") != "image"):
+            raise EditError("only pictures can be cropped (panels draw what their code draws)")
+        if p.get("rotation") or p.get("flip"):
+            raise EditError("crop a picture before turning or flipping it (set its rotation to 0 first)")
+        x, y, w, h = info["box"]
+        l, t, r, b = p.get("crop") or (0, 0, 0, 0)
+        fw, fh = w / max(1 - l - r, 1e-6), h / max(1 - t - b, 1e-6)
+        fx, fy = x - l * fw, y - t * fh
+        nx, ny, nw, nh = (float(v) for v in a["box"])
+        nl = min(max((nx - fx) / fw, 0), 0.95)
+        nt = min(max((ny - fy) / fh, 0), 0.95)
+        nr = min(max(1 - (nx + nw - fx) / fw, 0), 0.95 - nl)
+        nb = min(max(1 - (ny + nh - fy) / fh, 0), 0.95 - nt)
+        crop = tuple(round(v, 4) for v in (nl, nt, nr, nb))
+        upd = {"crop": REMOVE if not any(crop) else crop}
+        if info["kind"] == "image" and not info.get("parent"):
+            vx, vy = fx + nl * fw, fy + nt * fh
+            upd.update(x=round(vx, 2), y=round(vy, 2), w=round(fw * (1 - nl - nr), 2))
+            if p.get("h") is not None:
+                upd["h"] = round(fh * (1 - nt - nb), 2)
+        self._set(plan, data, pic, upd)
+        return "Crop"
+
+    def _op_rotate(self, plan, data, a):
+        """Turn elements by `by` degrees (counterclockwise): {oids, by}."""
+        for oid in self._top(data, a["oids"]):
+            info = self._info(data, oid)
+            pic = self._picture_call(data, info)
+            if pic["kind"] not in ("image", "inset", "panel", "text"):
+                continue
+            cur = (pic["props"].get("rotation") or 0)
+            new = (cur + float(a["by"])) % 360
+            self._set(plan, data, pic, {"rotation": REMOVE if new == 0 else round(new, 2)})
+        return "Rotate"
+
+    def _op_flip(self, plan, data, a):
+        """Mirror pictures: {oids, axis: h|v}. Flipping twice undoes it."""
+        for oid in self._top(data, a["oids"]):
+            pic = self._picture_call(data, self._info(data, oid))
+            if pic["kind"] not in ("image", "inset") or (pic.get("inner") not in (None, "image")):
+                continue
+            cur = pic["props"].get("flip")
+            new = None if cur == a["axis"] else (a["axis"] if not cur else None)
+            if cur and cur != a["axis"]:                 # h then v is a half turn
+                rot = ((pic["props"].get("rotation") or 0) + 180) % 360
+                self._set(plan, data, pic, {"flip": REMOVE, "rotation": REMOVE if rot == 0 else rot})
+                continue
+            self._set(plan, data, pic, {"flip": REMOVE if new is None else new})
+        return "Flip"
+
+    def _op_panel_text(self, plan, data, a):
+        """Retype a text a panel's code draws: {oid, key, text, old}. A string literal in the panel's code that is
+        the old text is changed; otherwise the panel gets a texts={key: text} override."""
+        info = self._info(data, a["oid"])
+        if not (info["kind"] == "panel" or (info["kind"] == "inset" and info.get("inner") == "panel")):
+            raise EditError("only the texts of a panel drawn by code can be retyped this way")
+        item = self._picture_call(data, info) if info["kind"] == "inset" else info
+        props = item["props"]
+        old, new = a.get("old"), a["text"]
+        src = props.get("source")
+        if old and isinstance(src, str) and src.endswith(".py") and not src.startswith("<"):
+            path = str((self.project / src).resolve())
+            if Path(path).exists() and not (props.get("texts") or {}).get(a["key"]):
+                code = plan.source(path)
+                hits = [n for n in ast.walk(code.tree) if isinstance(n, ast.Constant) and n.value == old]
+                if len(hits) == 1:
+                    n = hits[0]
+                    plan.add(path, [(code.start(n), code.end(n), srcedit.fmt(new))])
+                    return "Retype in Panel"
+        texts = dict(props.get("texts") or {})
+        texts[a["key"]] = new
+        self._set(plan, data, item, {"texts": texts})
+        return "Retype in Panel"
+
+    def _op_panel_color(self, plan, data, a):
+        """Recolour marks a panel's code draws: {oid, keys, color, old}. When the old colour is written once in the
+        panel's code, that is changed (every mark drawn with it follows); otherwise the panel gets colors={key: new}
+        for the marks given."""
+        import matplotlib.colors as mcolors
+        info = self._info(data, a["oid"])
+        if not (info["kind"] == "panel" or (info["kind"] == "inset" and info.get("inner") == "panel")):
+            raise EditError("only the marks of a panel drawn by code can be recoloured this way")
+        item = self._picture_call(data, info) if info["kind"] == "inset" else info
+        props = item["props"]
+        new, old, keys = a["color"], (a.get("old") or "").upper(), list(a["keys"])
+        src = props.get("source")
+        overridden = set(props.get("colors") or {}) & set(keys)
+        if old and isinstance(src, str) and src.endswith(".py") and not overridden:
+            path = str((self.project / src).resolve())
+            if Path(path).exists():
+                code = plan.source(path)
+                hits = []
+                for n in ast.walk(code.tree):
+                    if isinstance(n, ast.Constant) and isinstance(n.value, str):
+                        try:
+                            if mcolors.to_hex(n.value).upper() == old:
+                                hits.append(n)
+                        except ValueError:
+                            pass
+                if len(hits) == 1:
+                    n = hits[0]
+                    plan.add(path, [(code.start(n), code.end(n), srcedit.fmt(new))])
+                    return "Recolour in Panel"
+        colors = dict(props.get("colors") or {})
+        for k in keys:
+            colors[k] = new
+        self._set(plan, data, item, {"colors": colors})
+        return "Recolour in Panel"
+
+    def _op_paste_style(self, plan, data, a):
+        """Give elements another's look (the eyedropper): {oids, props}; each takes the settings its kind has."""
+        for oid in self._top(data, a["oids"]):
+            info = self._info(data, oid)
+            if info["kind"] == "label":
+                continue
+            params = set(srcedit.PARAMS.get(info["method"], []))
+            upd = {k: v for k, v in a["props"].items() if k in params}
+            if upd:
+                self._set(plan, data, info, upd)
+        return "Paste Style"
+
+    def _op_replace_source(self, plan, data, a):
+        """Show another picture file in a picture's place: {oid, path} (copied into images/ if it is elsewhere)."""
+        info = self._info(data, a["oid"])
+        pic = self._picture_call(data, info)
+        if pic["kind"] not in ("image", "inset") and info.get("kind") != "image":
+            raise EditError("only a picture's file can be replaced")
+        rel = self._bring_in(Path(a["path"]))
+        self._set(plan, data, pic, {"source": str(rel)})
+        return "Replace Picture"
+
+    def _bring_in(self, src: Path) -> Path:
+        """A file in the project: itself, or a copy in panels/ or images/."""
+        src = src.resolve()
+        if not src.exists():
+            raise EditError(f"no file {src}")
+        if str(src).startswith(str(self.project) + os.sep):
+            return src.relative_to(self.project)
+        dest_dir = self.project / ("panels" if src.suffix == ".py" else "images")
+        dest_dir.mkdir(exist_ok=True)
+        dest = dest_dir / src.name
+        n = 1
+        while dest.exists() and dest.read_bytes() != src.read_bytes():
+            n += 1
+            dest = dest_dir / f"{src.stem}-{n}{src.suffix}"
+        if not dest.exists():
+            shutil.copy2(src, dest)
+        return dest.relative_to(self.project)
+
+    def _op_group(self, plan, data, a):
+        used = {e["props"].get("group") for e in data["elements"]}
+        n = 1
+        while f"g{n}" in used:
+            n += 1
+        for oid in self._top(data, a["oids"]):
+            info = self._info(data, oid)
+            if info["kind"] != "label":
+                self._set(plan, data, info, {"group": f"g{n}"})
+        return "Group"
+
+    def _op_ungroup(self, plan, data, a):
+        for oid in self._top(data, a["oids"]):
+            info = self._info(data, oid)
+            if info["kind"] != "label" and info["props"].get("group"):
+                self._set(plan, data, info, {"group": REMOVE})
+        return "Ungroup"
+
+    def _insert_point(self, plan, data):
+        """Where a new element's statement goes: after the figure file's last element statement (module level)."""
+        path = data["file"]
+        src = plan.source(path)
+        stm = self._element_stmts(src, data)
+        top = [st for st, _ in stm.values() if st in src.tree.body]
+        if top:
+            last = max(top, key=lambda s: s.end_lineno)
+        else:
+            fs = data.get("figureSite") or {}
+            call = src.find_call(fs, "Figure") if fs else None
+            last = src.statement(call) if call is not None else src.tree.body[-1]
+        _, end = src.stmt_span(last)
+        return src, end, src.indent(last)
+
+    def _op_insert(self, plan, data, a):
+        """A new element: {kind, props}. kind: panel, image, text, line, arrow, rect, ellipse, bracket."""
+        kind, props = a["kind"], dict(a.get("props", {}))
+        if "points" in props:
+            props["points"] = [tuple(q) for q in props["points"]]
+        src, end, ind = self._insert_point(plan, data)
+        var = srcedit.figure_var(src)
+        first = {"panel": "source", "image": "source", "text": "text"}.get(kind)
+        args = [props.pop(first)] if first else []
+        if kind in ("line", "arrow"):
+            args = [props.pop(k) for k in ("x1", "y1", "x2", "y2")]
+        if kind == "bracket":
+            args = [props.pop(k) for k in ("x1", "x2", "y")]
+        line = ind + srcedit.call_text(var, kind, args, props) + "\n"
+        prefix = "" if src.text[:end].endswith("\n") or not src.text[:end] else "\n"
+        plan.add(src.path, [(end, end, prefix + line)])
+        plan.inserted[src.path] = [src.text[:end].count("\n") + 1 + (1 if prefix else 0)]
+        return f"Insert {kind.title()}"
+
+    def _figure_call(self, plan, data):
+        fs = data.get("figureSite")
+        src = plan.source(fs["file"])
+        call = src.find_call(fs, "Figure")
+        if call is None:
+            raise EditError("can't find the Figure(...) call")
+        return src, call
+
+    def _op_figure(self, plan, data, a):
+        """Figure settings: {props: {width, height, background}}."""
+        src, call = self._figure_call(plan, data)
+        plan.add(src.path, srcedit.set_args(src, call, "Figure", a["props"], "the figure"))
+        return "Figure Size" if {"width", "height"} & set(a["props"]) else "Figure Settings"
+
+    def _label_style(self, plan, data, props: dict):
+        ls = data["labelStyle"]
+        site = ls.get("site")
+        if site:
+            src = plan.source(site["file"])
+            call = src.find_call(site, ("Labels", "Labels.journal"))
+            if call is not None:
+                method = srcedit.callee(call)
+                plan.add(src.path, srcedit.set_args(src, call, method, props, "the labels"))
+                return
+        # no Labels(...) of its own: give the style (or the figure) one
+        cur = {k: v for k, v in ls["props"].items()}
+        changed = {**{k: v for k, v in cur.items() if k in props}, **props}
+        st = data["style"].get("site")
+        target = None
+        if st:
+            src = plan.source(st["file"])
+            call = src.find_call(st, ("Style", "Style.journal"))
+            if call is not None:
+                target = (src, call, srcedit.callee(call))
+        if target is None:
+            src, call = self._figure_call(plan, data)
+            target = (src, call, "Figure")
+        src, call, method = target
+        ref = srcedit.class_ref(src, "Labels")
+        if ls.get("preset"):
+            text = f'{ref}.journal({srcedit.fmt(ls["preset"])}' + "".join(
+                f", {k}={srcedit.fmt(v)}" for k, v in changed.items()) + ")"
+        else:
+            defaults = {"format": "{}", "case": "lower", "numbering": "alpha", "font": None, "size": 8,
+                        "weight": "bold", "style": "normal", "color": "#000000", "dx": 0.0, "dy": 0.0,
+                        "order": "reading", "align": True}
+            keep = {k: v for k, v in cur.items() if defaults.get(k, object()) != v}
+            keep.update(props)
+            text = f"{ref}(" + ", ".join(f"{k}={srcedit.fmt(v)}" for k, v in keep.items()) + ")"
+        patches = srcedit.set_args(src, call, method, {"labels": Raw(text)}, "the style")
+        plan.add(src.path, patches + srcedit.ensure_import(src, ref))
+
+    def _op_labels(self, plan, data, a):
+        """Label style: {props: {format, case, numbering, font, size, weight, style, color, dx, dy, order, align}}."""
+        self._label_style(plan, data, a["props"])
+        return "Label Style"
+
+    def _op_style(self, plan, data, a):
+        """Shared style: {props: {font, size, linewidth, despine, min_font, min_dpi}}."""
+        st = data["style"].get("site")
+        if st:
+            src = plan.source(st["file"])
+            call = src.find_call(st, ("Style", "Style.journal"))
+            if call is not None:
+                plan.add(src.path, srcedit.set_args(src, call, srcedit.callee(call), a["props"], "the style"))
+                return "Style"
+        src, call = self._figure_call(plan, data)
+        ref = srcedit.class_ref(src, "Style")
+        text = f"{ref}(" + ", ".join(f"{k}={srcedit.fmt(v)}" for k, v in a["props"].items()) + ")"
+        plan.add(src.path, srcedit.set_args(src, call, "Figure", {"style": Raw(text)}, "the figure")
+                 + srcedit.ensure_import(src, ref))
+        return "Style"
+
+    def _op_guide_add(self, plan, data, a):
+        src = plan.source(data["file"])
+        var = srcedit.figure_var(src)
+        k = "x" if a.get("x") is not None else "y"
+        end = len(src.text)
+        prefix = "" if src.text.endswith("\n") else "\n"
+        plan.add(src.path, [(end, end, prefix + f"{var}.guide({k}={srcedit.fmt(float(a[k]))})\n")])
+        return "Add Guide"
+
+    def _guide_call(self, plan, data, i):
+        g = data["guides"][int(i)]
+        src = plan.source(g["site"]["file"])
+        call = src.find_call(g["site"], "guide")
+        if call is None:
+            raise EditError("can't find that guide's code")
+        return src, call, g
+
+    def _op_guide_move(self, plan, data, a):
+        src, call, g = self._guide_call(plan, data, a["index"])
+        k = "x" if g["x"] is not None else "y"
+        plan.add(src.path, srcedit.set_args(src, call, "guide", {k: float(a["value"])}, "the guide"))
+        return "Move Guide"
+
+    def _op_guide_delete(self, plan, data, a):
+        src, call, g = self._guide_call(plan, data, a["index"])
+        st = src.statement(call)
+        a0, b0 = src.stmt_span(st)
+        plan.add(src.path, [(a0, b0, "")])
+        return "Delete Guide"
+
+    # --- clipboard ---
+
+    def copy(self, a: dict) -> dict:
+        """The code of elements, to paste into this or another figure: {figure, oids} -> {code: [statements]}.
+        A layout brings the Panel(...) lines it uses."""
+        data = self.render(a["figure"], a.get("pxPerMM"))
+        plan = Plan()
+        out, seen = [], set()
+        for oid in self._top(data, [o for o in a["oids"] if not o.startswith("L")]):
+            info = self._info(data, oid)
+            src, call = self._call(plan, data, info)
+            st = src.statement(call)
+            var = srcedit.figure_var(src)
+            if info["kind"] == "layout":
+                used = {n.id for n in ast.walk(st) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+                for d in src.tree.body:
+                    if isinstance(d, ast.Assign) and d.lineno < st.lineno and isinstance(d.value, ast.Call) \
+                            and any(isinstance(t, ast.Name) and t.id in used for t in d.targets) and d.lineno not in seen:
+                        seen.add(d.lineno)
+                        out.append(src.text[slice(*src.stmt_span(d))].strip("\n"))
+            if st.lineno in seen:
+                continue
+            seen.add(st.lineno)
+            text = src.text[slice(*src.stmt_span(st))].strip("\n")
+            out.append(re.sub(rf"\b{re.escape(var)}\.", "\u00a7FIG\u00a7.", text))
+        return {"ok": True, "code": out}
+
+    def paste(self, a: dict) -> dict:
+        """Put copied code into a figure: {figure, code, dx?, dy?}. Names it assigns that the figure already has get
+        a number; positions move by (dx, dy)."""
+        name = a["figure"]
+        with self.edit_lock:
+            data = self.render(name, a.get("pxPerMM"))
+            if data.get("error"):
+                return {"ok": False, "error": "the figure's code doesn't run; fix it first"}
+            plan = Plan()
+            try:
+                src, end, ind = self._insert_point(plan, data)
+                var = srcedit.figure_var(src)
+                taken = {n.id for n in ast.walk(src.tree) if isinstance(n, ast.Name)}
+                block = "\n".join(a["code"]).replace("\u00a7FIG\u00a7.", f"{var}.")
+                tree = ast.parse(block)
+                renames = {}
+                for st in tree.body:
+                    if isinstance(st, ast.Assign):
+                        for t in st.targets:
+                            if isinstance(t, ast.Name) and t.id in taken:
+                                k = 2
+                                while f"{t.id}{k}" in taken:
+                                    k += 1
+                                renames[t.id] = f"{t.id}{k}"
+                                taken.add(renames[t.id])
+                for old, new in renames.items():
+                    block = re.sub(rf"\b{re.escape(old)}\b", new, block)
+                dx, dy = float(a.get("dx", 0)), float(a.get("dy", 0))
+                if dx or dy:
+                    one = Source(block)
+                    patches = []
+                    for st in one.tree.body:
+                        call = st.value if isinstance(st, (ast.Expr, ast.Assign)) else None
+                        if not isinstance(call, ast.Call):
+                            continue
+                        method = srcedit.callee(call)
+                        kind = METHOD_KIND.get(method)
+                        if not kind:
+                            continue
+                        upd = {}
+                        for k in GEOMETRY.get(kind, ()):
+                            present, v, lit = srcedit.arg_value(one, call, k, method)
+                            if present and lit and isinstance(v, (int, float)):
+                                upd[k] = v + (dy if k.startswith("y") else dx)
+                        if kind == "path":
+                            present, v, lit = srcedit.arg_value(one, call, "points", method)
+                            if present and lit:
+                                upd["points"] = [(x + dx, y + dy) for x, y in v]
+                        if upd:
+                            patches += srcedit.set_args(one, call, method, upd)
+                    block = srcedit.apply(block, patches)
+                missing = _undefined(block, src.text[:end])
+                if missing:
+                    raise EditError(f"the pasted code uses {', '.join(sorted(missing))}, which this figure doesn't have; "
+                                    "copy those panels too")
+                text = "".join(ind + ln + "\n" if ln.strip() else "\n" for ln in block.splitlines())
+                plan.add(src.path, [(end, end, text)])
+                first = src.text[:end].count("\n") + 1
+                plan.inserted[src.path] = list(range(first, first + text.count("\n")))
+                texts = plan.texts()
+            except (EditError, SyntaxError, KeyError, ValueError) as exc:
+                return {"ok": False, "error": str(exc)}
+            self._write(texts, "Paste")
+            return {"ok": True, **self._after(name, a.get("pxPerMM"), plan.inserted)}
+
+    def paste_image(self, a: dict) -> dict:
+        """A picture from the clipboard (PNG data in a file the app wrote): saved in images/ and placed."""
+        src = Path(a["path"])
+        (self.project / "images").mkdir(exist_ok=True)
+        n = 1
+        while (self.project / "images" / f"pasted-{n}.png").exists():
+            n += 1
+        dest = self.project / "images" / f"pasted-{n}.png"
+        shutil.copy2(src, dest)
+        return self.import_file({**a, "path": str(dest)})
+
+    # --- files the editor adds ---
+
+    def new_figure(self, a: dict) -> dict:
+        name = a.get("name") or "fig"
+        base, n = name, 1
+        while (self.project / f"{name}.py").exists():
+            n += 1
+            name = f"{base}{n}"
+        if not name.isidentifier():
+            return {"ok": False, "error": f"{name} can't be a figure name: use letters, digits and _"}
+        if not (self.project / "style.py").exists():
+            (self.project / "style.py").write_text(templates.style_py(a.get("journal")), encoding="utf-8")
+        text = templates.figure_py(float(a.get("width", 183)), float(a.get("height", 120)))
+        path = self.project / f"{name}.py"
+        with self.edit_lock:
+            path.write_text(text, encoding="utf-8")
+            self.history.append({"label": "New Figure", "files": {str(path): (None, text.encode())}})
+            self.redo.clear()
+            self._sig = self.fingerprint()
+        return {"ok": True, "name": name}
+
+    def new_panel(self, a: dict) -> dict:
+        """A new panel file from the template, and the panel on the figure: {figure, name, x, y, w, h}."""
+        name = a.get("name") or "panel"
+        (self.project / "panels").mkdir(exist_ok=True)
+        stem, n = name, 1
+        while (self.project / "panels" / f"{stem}.py").exists():
+            n += 1
+            stem = f"{name}{n}"
+        path = self.project / "panels" / f"{stem}.py"
+        with self.edit_lock:
+            path.write_text(templates.panel_py(stem), encoding="utf-8")
+            res = self.edit({"figure": a["figure"], "op": "insert", "kind": "panel", "pxPerMM": a.get("pxPerMM"),
+                             "props": {"source": f"panels/{stem}.py", "x": a.get("x", 5), "y": a.get("y", 5),
+                                       "w": a.get("w", 60), "h": a.get("h", 45)}})
+            if res.get("ok") and self.history:
+                self.history[-1]["files"][str(path)] = (None, path.read_bytes())
+            return {**res, "file": str(path)}
+
+    def import_file(self, a: dict) -> dict:
+        """A dropped or chosen file onto the figure: {figure, path, x, y, w?}. Pictures outside the project are
+        copied into its images folder; a .py file becomes a panel."""
+        src = Path(a["path"]).resolve()
+        try:
+            rel = self._bring_in(src)
+        except EditError as exc:
+            return {"ok": False, "error": str(exc)}
+        x, y = float(a.get("x", 5)), float(a.get("y", 5))
+        if src.suffix == ".py":
+            text = src.read_text(encoding="utf-8", errors="replace")
+            fn = "draw"
+            if "def draw(" not in text:
+                defs = [n.name for n in ast.parse(text).body if isinstance(n, ast.FunctionDef)]
+                if not defs:
+                    return {"ok": False, "error": f"{src.name} has no function to draw a panel with"}
+                fn = defs[0]
+            props = {"source": str(rel), "x": x, "y": y, "w": float(a.get("w", 60)), "h": float(a.get("h", 45))}
+            if fn != "draw":
+                props["function"] = fn
+            return self.edit({"figure": a["figure"], "op": "insert", "kind": "panel", "props": props,
+                              "pxPerMM": a.get("pxPerMM")})
+        return self.edit({"figure": a["figure"], "op": "insert", "kind": "image", "pxPerMM": a.get("pxPerMM"),
+                          "props": {"source": str(rel), "x": x, "y": y, "w": float(a.get("w", 60))}})
+
+    def export(self, a: dict) -> dict:
+        with self.render_lock:
+            return self.worker.request({"cmd": "export", "project": str(self.project), "cache": str(self.cache),
+                                        "file": self.figure_file(a["figure"]), "path": a["path"],
+                                        "format": a.get("format"), "dpi": a.get("dpi", 600),
+                                        "dark": bool(a.get("dark")), "cmyk": bool(a.get("cmyk")),
+                                        "outline": bool(a.get("outline"))}, timeout=600)
+
+
+def _natural(s: str):
+    import re
+    return [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", s)]
+
+
+def _undefined(block: str, before: str) -> set:
+    """Names the block reads that neither it nor the code before it defines (nor Python or fignimble)."""
+    import builtins
+    import fignimble
+    defined = set(dir(builtins)) | set(fignimble.__all__) | {"fignimble"}
+    for tree in (ast.parse(before or "\n"), ast.parse(block)):
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store):
+                defined.add(n.id)
+            elif isinstance(n, (ast.Import, ast.ImportFrom)):
+                for al in n.names:
+                    defined.add((al.asname or al.name).split(".")[0])
+            elif isinstance(n, (ast.FunctionDef, ast.ClassDef)):
+                defined.add(n.name)
+    return {n.id for n in ast.walk(ast.parse(block)) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
+            and n.id not in defined}

@@ -1,0 +1,313 @@
+import AppKit
+
+/// Fignimble's look (Manimble's, from github.com/pachterlab/Manimble): quiet neutral surfaces, one teal accent.
+enum Theme {
+    static let accent = NSColor(srgbRed: 0.0, green: 0.553, blue: 0.62, alpha: 1)            // #008D9E
+    static let accentSoft = NSColor(srgbRed: 0.0, green: 0.553, blue: 0.62, alpha: 0.18)
+    static let warm = NSColor(srgbRed: 0.98, green: 0.32, blue: 0.42, alpha: 1)              // #FA526B: smart guides and warnings
+    static let canvasTop = dynamic(light: NSColor(srgbRed: 0.965, green: 0.965, blue: 0.965, alpha: 1),
+                                   dark: NSColor(srgbRed: 0.150, green: 0.150, blue: 0.150, alpha: 1))
+    /// The stage around the slide, the rulers and the drawer.
+    static let canvasBottom = dynamic(light: NSColor(srgbRed: 0.918, green: 0.918, blue: 0.918, alpha: 1),
+                                      dark: NSColor(srgbRed: 0.080, green: 0.080, blue: 0.080, alpha: 1))
+    /// The code card and the terminals.
+    static let codeBackground = dynamic(light: NSColor(srgbRed: 0.988, green: 0.988, blue: 0.988, alpha: 1),
+                                        dark: NSColor(srgbRed: 0.105, green: 0.105, blue: 0.105, alpha: 1))
+    /// Header strips above the code and in the drawer.
+    static let barBackground = dynamic(light: NSColor(srgbRed: 0.945, green: 0.945, blue: 0.945, alpha: 1),
+                                       dark: NSColor(srgbRed: 0.132, green: 0.132, blue: 0.132, alpha: 1))
+    /// The slide navigator on the left: a solid gray (no vibrancy, so the wallpaper can't tint it).
+    static let sidebarBackground = dynamic(light: NSColor(white: 0.93, alpha: 1), dark: NSColor(white: 0.17, alpha: 1))
+
+    /// A colour that follows the window's light/dark appearance.
+    static func dynamic(light: NSColor, dark: NSColor) -> NSColor {
+        NSColor(name: nil) { $0.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light }
+    }
+    /// Foreground ink on the dark/light chrome: white at `alpha` in dark mode, black in light mode.
+    static func ink(_ alpha: CGFloat) -> NSColor { dynamic(light: NSColor(white: 0, alpha: alpha), dark: NSColor(white: 1, alpha: alpha)) }
+
+    /// Layer colours are CGColors fixed when they are set; `apply` sets them now and again whenever light/dark changes.
+    /// The view is handed back to `apply`, so the closure need not (and must not) capture it.
+    static func layerColors<V: NSView>(_ view: V, _ apply: @escaping (V) -> Void) {
+        AppearanceWatch.shared.add(view) { [weak view] in if let v = view { apply(v) } }
+    }
+
+    static func font(_ size: CGFloat, _ weight: NSFont.Weight = .regular) -> NSFont { .systemFont(ofSize: size, weight: weight) }
+    static func mono(_ size: CGFloat) -> NSFont { .monospacedSystemFont(ofSize: size, weight: .regular) }
+}
+
+private final class AppearanceWatch {
+    static let shared = AppearanceWatch()
+    private struct Entry { weak var view: NSView?; let apply: () -> Void }
+    private var entries: [Entry] = []
+    private var observation: NSKeyValueObservation?
+
+    func add(_ view: NSView, _ apply: @escaping () -> Void) {
+        entries.removeAll { $0.view == nil }
+        entries.append(Entry(view: view, apply: apply))
+        view.effectiveAppearance.performAsCurrentDrawingAppearance(apply)
+        if observation == nil {
+            observation = NSApp.observe(\.effectiveAppearance) { [weak self] _, _ in
+                // the views' own effective appearance updates after the app's
+                DispatchQueue.main.async { self?.refresh() }
+            }
+        }
+    }
+
+    private func refresh() {
+        entries.removeAll { $0.view == nil }
+        for e in entries { e.view?.effectiveAppearance.performAsCurrentDrawingAppearance(e.apply) }
+    }
+}
+
+/// Small uppercase section label used in the inspector.
+func sectionLabel(_ s: String) -> NSTextField {
+    let l = NSTextField(labelWithString: s.uppercased())
+    l.font = Theme.font(10, .semibold)
+    l.textColor = .tertiaryLabelColor
+    return l
+}
+
+/// Field caption (sentence case, secondary).
+func fieldLabel(_ s: String) -> NSTextField {
+    let l = NSTextField(labelWithString: s)
+    l.font = Theme.font(11)
+    l.textColor = .secondaryLabelColor
+    return l
+}
+
+/// A thin separator line. Not an NSBox separator: its inner line view keeps a fixed width from the first layout,
+/// which then holds the window at that width (a frame saved on a wider display stayed wider than the screen).
+func hairline() -> NSView { Hairline() }
+
+private final class Hairline: NSView {
+    override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: 1) }
+    override func draw(_ dirtyRect: NSRect) { NSColor.separatorColor.setFill(); bounds.fill() }
+}
+
+/// A thin accent progress bar. `set` fills it to a known fraction; `run` drives it on a time estimate: it reaches
+/// 90% when the estimated time is up, then creeps on toward 99% while the work overruns. It never moves backwards.
+final class ProgressBar: NSView {
+    private let fill = CALayer()
+    private(set) var running = false
+
+    init() {
+        super.init(frame: .zero)
+        wantsLayer = true; layer?.cornerRadius = 1.5; layer?.masksToBounds = true
+        fill.cornerRadius = 1.5; fill.anchorPoint = CGPoint(x: 0, y: 0.5)
+        layer?.addSublayer(fill)
+        Theme.layerColors(self) { v in
+            v.layer?.backgroundColor = Theme.ink(0.14).cgColor
+            v.fill.backgroundColor = Theme.accent.cgColor
+        }
+        heightAnchor.constraint(equalToConstant: 3).isActive = true
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    /// The fraction on screen right now (mid-animation included).
+    var current: Double {
+        guard bounds.width > 0 else { return 0 }
+        return Double((fill.presentation() ?? fill).bounds.width / bounds.width)
+    }
+
+    override func layout() {
+        super.layout()
+        fill.position = CGPoint(x: 0, y: bounds.height / 2)
+        if !running { place(current, animated: false) }
+    }
+
+    func reset() { running = false; fill.removeAllAnimations(); place(0, animated: false) }
+
+    /// Fill to `fraction` (0…1) with a short animation.
+    func set(_ fraction: Double) { running = false; place(min(max(fraction, 0), 1), animated: true) }
+
+    /// Estimate mode: 90% in `remaining` seconds (from wherever the bar is), then ease toward 99% over `tail` seconds.
+    func run(remaining: Double, tail: Double = 4) {
+        let w = bounds.width, h = bounds.height
+        guard w > 0 else { return }
+        running = true
+        let from = current
+        let ahead = max(remaining, 0.05), tailTime = max(tail, 1)
+        let a = CAKeyframeAnimation(keyPath: "bounds.size.width")
+        if from < 0.9 {
+            a.values = [from * w, 0.9 * w, 0.99 * w]
+            a.keyTimes = [0, NSNumber(value: ahead / (ahead + tailTime)), 1]
+            a.timingFunctions = [CAMediaTimingFunction(name: .linear), CAMediaTimingFunction(name: .easeOut)]
+            a.duration = ahead + tailTime
+        } else {
+            a.values = [from * w, 0.99 * w]
+            a.timingFunctions = [CAMediaTimingFunction(name: .easeOut)]
+            a.duration = tailTime
+        }
+        a.fillMode = .forwards; a.isRemovedOnCompletion = false
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        fill.bounds = CGRect(x: 0, y: 0, width: 0.99 * w, height: h)
+        fill.removeAnimation(forKey: "run")
+        CATransaction.commit()
+        fill.add(a, forKey: "run")
+    }
+
+    private func place(_ fraction: Double, animated: Bool) {
+        fill.removeAnimation(forKey: "run")
+        CATransaction.begin()
+        if animated { CATransaction.setAnimationDuration(0.2) } else { CATransaction.setDisableActions(true) }
+        fill.bounds = CGRect(x: 0, y: 0, width: bounds.width * CGFloat(fraction), height: bounds.height)
+        CATransaction.commit()
+    }
+}
+
+/// Translucent rounded "pill" used for toasts and the busy indicator (text with a progress bar beneath).
+/// The pill's leading icon: a click copies the pill's message (see `Pill.copyMessage`).
+final class PillIcon: NSImageView {
+    var onClick: (() -> Void)?
+    override func mouseDown(with event: NSEvent) { if let onClick { onClick() } else { super.mouseDown(with: event) } }
+    override func resetCursorRects() { if onClick != nil { addCursorRect(bounds, cursor: .pointingHand) } }
+}
+
+final class Pill: NSVisualEffectView {
+    let label = NSTextField(labelWithString: "")
+    let icon = PillIcon()
+    /// True while the pointer is over the pill: the toast timer waits so the message can be selected or copied.
+    private(set) var hovered = false
+    private var copyFeedback: DispatchWorkItem?
+    let bar = ProgressBar()
+    /// The X at the right of a spinning pill; set on the busy pill to let the user stop what is rendering.
+    let cancelButton = NSButton()
+    var onCancel: (() -> Void)?
+
+    init() {
+        super.init(frame: .zero)
+        material = .hudWindow; blendingMode = .withinWindow; state = .active
+        wantsLayer = true; layer?.cornerRadius = 15; layer?.masksToBounds = true
+        label.font = Theme.font(12, .medium); label.textColor = .labelColor
+        label.maximumNumberOfLines = 3; label.lineBreakMode = .byWordWrapping
+        label.isSelectable = true                        // warnings and errors can be highlighted and copied
+        icon.symbolConfiguration = .init(pointSize: 13, weight: .semibold)
+        icon.toolTip = "Click to copy this message"
+        icon.onClick = { [weak self] in self?.copyMessage() }
+        cancelButton.isBordered = false; cancelButton.bezelStyle = .inline; cancelButton.imagePosition = .imageOnly
+        cancelButton.image = NSImage(systemSymbolName: "xmark.circle.fill", accessibilityDescription: "Cancel")
+        cancelButton.symbolConfiguration = .init(pointSize: 14, weight: .semibold)
+        cancelButton.contentTintColor = .secondaryLabelColor
+        cancelButton.toolTip = "Stop rendering"
+        cancelButton.setAccessibilityLabel("Stop rendering")
+        cancelButton.target = self; cancelButton.action = #selector(cancelPressed)
+        cancelButton.setContentHuggingPriority(.required, for: .horizontal)
+        cancelButton.isHidden = true
+        let row = NSStackView(views: [icon, label, cancelButton]); row.spacing = 7; row.alignment = .centerY
+        bar.isHidden = true
+        let column = NSStackView(views: [row, bar]); column.orientation = .vertical; column.alignment = .leading; column.spacing = 6
+        column.edgeInsets = NSEdgeInsets(top: 7, left: 12, bottom: 7, right: 14)
+        column.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(column)
+        NSLayoutConstraint.activate([
+            column.leadingAnchor.constraint(equalTo: leadingAnchor), column.trailingAnchor.constraint(equalTo: trailingAnchor),
+            column.topAnchor.constraint(equalTo: topAnchor), column.bottomAnchor.constraint(equalTo: bottomAnchor),
+            bar.leadingAnchor.constraint(equalTo: row.leadingAnchor), bar.trailingAnchor.constraint(equalTo: row.trailingAnchor),
+            bar.widthAnchor.constraint(greaterThanOrEqualToConstant: 140),
+        ])
+        isHidden = true; alphaValue = 0
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
+                                       owner: self, userInfo: nil))
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func mouseEntered(with event: NSEvent) { hovered = true }
+    override func mouseExited(with event: NSEvent) { hovered = false }
+
+    /// Put the message on the clipboard and flash a checkmark in place of the icon.
+    func copyMessage() {
+        let text = label.stringValue
+        guard !text.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        let (image, tint) = (icon.image, icon.contentTintColor)
+        copyFeedback?.cancel()
+        icon.image = NSImage(systemSymbolName: "doc.on.doc.fill", accessibilityDescription: "Copied")
+        icon.contentTintColor = .systemGreen
+        icon.toolTip = "Copied"
+        let w = DispatchWorkItem { [weak self] in
+            guard let self, self.label.stringValue == text else { return }
+            self.icon.image = image; self.icon.contentTintColor = tint; self.icon.toolTip = "Click to copy this message"
+        }
+        copyFeedback = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: w)
+    }
+
+    /// `spinning`: the pill reports work in progress and shows the bar. `progress` 0…1 fills it by count; otherwise
+    /// `remaining` seconds drive it as a time estimate; with neither, a running estimate keeps going or a default
+    /// (`defaultEstimate` seconds) starts. `cancellable`: a spinning pill with an `onCancel` shows the X.
+    func show(_ text: String, symbol: String?, tint: NSColor?, spinning: Bool = false, progress: Double? = nil,
+              remaining: Double? = nil, cancellable: Bool = true) {
+        label.stringValue = text
+        copyFeedback?.cancel(); icon.toolTip = "Click to copy this message"
+        icon.isHidden = symbol == nil || spinning
+        cancelButton.isHidden = !(spinning && cancellable && onCancel != nil)
+        cancelButton.isEnabled = true
+        if let s = symbol { icon.image = NSImage(systemSymbolName: s, accessibilityDescription: nil); icon.contentTintColor = tint }
+        let wasHidden = isHidden || alphaValue == 0
+        bar.isHidden = !spinning
+        if spinning {
+            if wasHidden { bar.reset() }
+            layoutSubtreeIfNeeded()                          // the bar needs its width before it can animate
+            if let p = progress { bar.set(p) }
+            else if let r = remaining { bar.run(remaining: r) }
+            else if !bar.running { bar.run(remaining: defaultEstimate) }
+        }
+        isHidden = false
+        NSAnimationContext.runAnimationGroup { $0.duration = 0.18; animator().alphaValue = 1 }
+    }
+    var defaultEstimate = 3.0
+
+    @objc private func cancelPressed() {
+        cancelButton.isEnabled = false                   // one request is enough; the pill goes when the job stops
+        onCancel?()
+    }
+
+    func hide() {
+        NSAnimationContext.runAnimationGroup({ $0.duration = 0.25; animator().alphaValue = 0 }, completionHandler: { [weak self] in
+            if self?.alphaValue == 0 { self?.isHidden = true; self?.bar.reset() }
+        })
+    }
+}
+
+extension NSAlert {
+    private static var copierKey = 0
+
+    /// Add a "Copy" button that puts the alert's title and text on the clipboard without closing the alert. Call it
+    /// after the alert's other buttons so their responses (first, second, … button) keep their meaning; an alert with
+    /// no buttons gets an "OK" first, as `runModal` would have added. A long text (a list of file paths, a traceback)
+    /// moves into a scrolling box, since NSAlert grows to fit it and would push its buttons below the screen.
+    func addCopyButton() {
+        if buttons.isEmpty { addButton(withTitle: "OK") }
+        let copier = AlertCopier(text: [messageText, informativeText].filter { !$0.isEmpty }.joined(separator: "\n\n"))
+        if accessoryView == nil, informativeText.count > 700 || informativeText.filter({ $0 == "\n" }).count > 14 {
+            let scroll = NSTextView.scrollableTextView()
+            scroll.frame = NSRect(x: 0, y: 0, width: 460, height: 260)
+            scroll.hasVerticalScroller = true; scroll.borderType = .bezelBorder
+            if let tv = scroll.documentView as? NSTextView {
+                tv.string = informativeText; tv.isEditable = false; tv.isSelectable = true
+                tv.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+                tv.textContainerInset = NSSize(width: 4, height: 4)
+            }
+            accessoryView = scroll
+            informativeText = ""
+        }
+        objc_setAssociatedObject(self, &Self.copierKey, copier, .OBJC_ASSOCIATION_RETAIN)
+        let b = addButton(withTitle: "Copy")
+        b.target = copier; b.action = #selector(AlertCopier.copy(_:))   // retargeted, so it no longer ends the alert
+        b.keyEquivalent = ""
+        b.toolTip = "Copy this message to the clipboard"
+    }
+}
+
+private final class AlertCopier: NSObject {
+    let text: String
+    init(text: String) { self.text = text }
+    @objc func copy(_ sender: NSButton) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        sender.title = "Copied"
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak sender] in sender?.title = "Copy" }
+    }
+}

@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fignimble"
+version = "0.1.0"
+description = "Multi-panel figures for publication, assembled from Python"
+requires-python = ">=3.10"
+dependencies = ["matplotlib>=3.7", "pymupdf>=1.24", "pillow>=10", "numpy>=1.24"]
+license = { text = "BSD-2-Clause" }
+
+[project.scripts]
+fignimble = "fignimble.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["engine"]

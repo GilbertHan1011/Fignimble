@@ -1,0 +1,206 @@
+# Fignimble
+
+Fignimble assembles multi-panel figures for publication, the part of Illustrator scientists actually use, with Python
+underneath everything. Each figure is a short Python file that places panels, pictures, text and arrows; each panel
+is drawn by matplotlib code. You edit a figure on the canvas (drag, resize, align, retype), in the code pane, or by
+asking a coding agent (Claude Code, Codex, Gemini CLI) in Fignimble's terminal. All three change the same files, and
+Fignimble re-renders as they change.
+
+Fignimble is built on [Manimble](https://github.com/pachterlab/Manimble): the engine/app split, the JSON-lines
+protocol, the undo model that coexists with an agent's edits, the terminal drawer and the agent instruction files
+come from there.
+
+![](docs/screenshot.png)
+
+## A figure is Python
+
+```python
+from fignimble import *
+from style import STYLE                       # shared by every figure of the paper
+
+fig = Figure(width=183, height=118, style=STYLE)        # millimetres; 183 mm = Nature double column
+
+fig.panel("panels/expression.py", x=4, y=3, w=56, h=52)            # labelled a
+fig.panel("panels/scatter.py", x=65, y=3, w=56, h=52)              # labelled b
+fig.image("images/cells.png", x=4, y=63, w=52)                     # pictures are panels too; h follows aspect
+fig.image("images/schematic.svg", x=65, y=63, w=56, h=47)          # PDF and SVG stay vector
+fig.panel("panels/expression.py", x=129, y=63, w=53, h=50, function="bars")
+fig.text("Treated", x=30, y=104, size=7, weight="bold", align="center")
+fig.arrow(57, 82, 64, 82, width=0.6)
+fig.bracket(147, 169, 67, text="**")                               # significance bracket
+```
+
+A panel file is matplotlib code that draws into a figure of exactly the panel's size:
+
+```python
+def draw(fig, genes=("GAPDH", "CD3E")):
+    ax = fig.add_subplot()
+    ...
+```
+
+Coordinates are millimetres from the top-left corner, y down, as in Illustrator. One call per element, with literal
+numbers, so that moving something on the canvas is a one-number change to its line of code.
+
+## Patchwork-style layouts
+
+Panels can also be laid out the way [patchwork](https://patchwork.data-imaginist.com) composes ggplots, instead of
+(or alongside) placing them by hand:
+
+```python
+expression, counts = Panel("panels/expression.py"), Panel("panels/counts.py")
+heatmap, bars = Panel("panels/heatmap.py"), Panel("panels/expression.py", function="bars")
+
+fig.layout((expression | counts) / (bars | heatmap), x=4, y=3, w=177, h=104, heights=[2, 1])   # | beside, / below
+fig.layout(Grid(expression, counts, bars, heatmap, ncol=2), x=4, y=3, w=177, h=104)           # + wraps into a grid
+fig.layout(Design("""
+    AAC
+    BDC
+""", A=expression, B=bars, C=heatmap, D=counts), x=4, y=3, w=177, h=104, widths=[1, 1, 1.2],
+           guides="collect", legend="bottom")                                                  # one shared legend
+fig.inset(Panel("panels/counts.py", function="zoom"), within=counts, x=0.55, y=0.08, w=0.4, h=0.35)
+```
+
+- `|`, `/`, `+` and parentheses compose; `Row`, `Column`, `Grid(ncol=, nrow=, byrow=)` and `Design` strings (`#` for
+  an empty cell) give parts their own relative `widths`/`heights`; `Spacer()` leaves a cell empty; `Image(...)` puts
+  a picture in a cell.
+- **Plot areas line up.** Each panel is drawn, its plot area measured, and panels that share an edge (a row's tops
+  and bottoms, a column's left sides…) are redrawn with equal margins, whatever their tick labels, as patchwork does.
+  This also applies to panels placed by hand whose edges line up (`Style(align_axes=False)` turns it off).
+- `guides="collect"` takes the legends out of the panels and shows each distinct entry once, at the right or bottom.
+- `fig.inset(...)` puts a panel on another, in fractions of its box; `fig.legend({...})` draws a legend of its own.
+- On the canvas, dragging a panel of a layout moves the layout; the gaps between rows and columns have grips you drag
+  to resize them (written back as `widths`/`heights`); the inspector sets the gap, widths, heights and legends.
+  **Object ▸ Make Layout** (⌘L) turns selected hand-placed panels into a layout, and **Release Layout** turns a layout
+  back into hand-placed panels where they are.
+
+## Annotating and finishing a figure
+
+```python
+cells = fig.image("images/cells.png", x=4, y=3, w=80, rotation=90, flip="h", crop=(0.1, 0, 0, 0))
+detail = fig.inset(Image("images/cells.png"), within=cells, x=0.6, y=0.6, w=0.38, h=0.38)
+fig.zoom(cells, detail, region=(0.2, 0.2, 0.25, 0.25))     # box + lines; the inset shows what's in the box
+fig.scalebar(cells, length=50, unit="µm", pixel_size=0.325) # sized from the picture's real pixels
+fig.text("**GFP**^{+} cells express *Cd3e*", x=4, y=70, width=78)   # bold, italic, sup/sub; wraps at 78 mm
+fig.arrow(96, 80, 120, 66, curve=0.25, tip="stealth")       # tips: triangle, stealth, open, bar, dot
+fig.path([(130, 60), (140, 72), (152, 62)], smooth=True, closed=False, arrow="end")
+fig.panel("panels/umap.py", x=142, y=3, w=40, h=46, texts={"ax0.xlabel": "UMAP 1"})   # a text the code draws
+fig.rect(100, 40, 20, 10, locked=True, hidden=False)
+STYLE = Style(..., palette={"WT": "#999999", "KO": "#d1495b"})     # color("KO") in panel code
+```
+
+In the editor:
+- **Texts inside panels:** select a panel and its axis labels, ticks and legend entries are outlined. Double-click one
+  to retype it: a string literal in the panel's code is changed there, anything else becomes a `texts={...}` override.
+- **Crop** a picture by double-clicking it (or Object ▸ Crop Picture): the handles crop, outward uncrops.
+- **Zoom boxes** (Insert ▸ Zoom Box): on one picture, makes the magnified inset too; drag the box and the inset
+  follows. **Scale bars** (Insert ▸ Scale Bar on Picture…).
+- **Rotate and flip** (Object menu, inspector): pictures any angle (PDF/SVG in quarter turns), panels in quarter turns.
+- **Pen (P)**: click points, double-click or Return to finish, click the first point to close; drag a path's points to
+  change it. Lines bend (inspector) and take arrowhead styles.
+- **Layers**: eye and lock buttons in the layers list (Object ▸ Lock ⌘2, Hide ⌘3); locked elements ignore the pointer.
+- **Colour**: `Style(palette="okabe-ito")` (or "tol-bright", "tol-muted", "tol-vibrant", "colorbrewer-set2",
+  "colorbrewer-dark2", "tableau", a list, or names → colours) sets the colours every panel plots with; new projects
+  start with Okabe–Ito, which colour-blind readers can tell apart. Every colour well has a hex field and the palette's
+  swatches; the picker's eyedropper takes any colour on screen; **Copy Style / Paste Style** (⌥⌘C, ⌥⌘V) carries colours,
+  lines and text settings to other elements.
+- **Recolouring inside panels**: the inspector lists each colour a panel draws with (lines, bars, points); change one
+  and every mark of that colour follows. Double-click a single line, bar or point to recolour just it. The colour is
+  changed in the panel's code when it is written there once, otherwise kept as `colors={...}` on the panel's line.
+- **Colour vision**: preflight warns when two colours of a panel (or of the annotations) that most people tell apart
+  look alike with deuteranopia, protanopia or tritanopia; **View ▸ Colour Vision** shows the figure as those readers
+  (or a greyscale print) would see it.
+- **Clipboard**: copy and paste between figures (a layout brings its panels; names are renumbered), Cut, and paste a
+  picture from another app (saved into `images/`).
+- **Print**: export EPS, CMYK (PDF, EPS, TIFF, JPEG) and text as outlines (PDF, EPS, SVG); PDF/EPS conversions use
+  Ghostscript (`brew install ghostscript`). `fignimble export fig1.py fig1.eps --cmyk --outline`.
+- Equal-spacing hints while dragging, **History** (⌥⌘⇧H: click a step to go back to it), **Replace…** for a picture's
+  file, and the **zoom tool (Z)**: drag a box to zoom to it, ⌥-click to zoom out.
+
+## Dark versions and dark mode
+
+Every figure has a dark version for talks, made from the same code: the style's text and axes turn white, the
+background black, black annotations white. **View ▸ Dark Version of Figure** (⌥⌘D, the moon in the toolbar) shows
+it; Export has a *Dark version* box; `fignimble export fig1.py fig1-dark.pdf --dark` writes it. Colours that panel code
+sets itself stay as they are; `is_dark()` lets panel code choose (`ecolor="white" if is_dark() else "black"`).
+The app itself follows the system's light or dark appearance, or **View ▸ Appearance** chooses one.
+
+## What Fignimble does that Illustrator doesn't
+
+- **Panel labels are automatic and consistent.** Panels are lettered in reading order (a, b, c… or A, B, C…,
+  `(a)`, `a.`, roman or arabic numbering) and re-lettered when panels move. One `Labels(...)` in `style.py` sets font,
+  size, weight and offset for every panel of every figure, and labels in a row or column line up. Dragging a label
+  moves *all* labels (they share one offset); ⌥-drag nudges one. A panel can have its own label (`label="a'"`) or none.
+- **Panels redraw at their size.** Resizing a panel re-runs its code at the new size, so its fonts and line widths
+  stay true instead of being scaled.
+- **One style for every panel.** `Style` (font, text size, line widths, despined axes) is applied to all panels, so
+  plots made at different times match. `Style.journal("nature")` sets the journal's font, sizes and label convention.
+- **Preflight.** Every render checks what a production office would: text below the minimum size (inside panels too),
+  pictures below 300 dpi at their printed size, Type 3 fonts, elements outside the figure, duplicate labels, and
+  whether the width matches the journal's columns (Nature, Science, Cell, PNAS, eLife).
+- **Exports that journals take**: vector PDF and SVG with real, editable TrueType text; PNG, TIFF (LZW) and JPEG at
+  300/600/1200 dpi.
+
+## The editor
+
+- Canvas with rulers in mm, zoom (⌘+/⌘−, pinch, ⌘-scroll), pan (scroll, space-drag), grid and snap to grid.
+- Select, shift-select, marquee; move with **smart guides** snapping to other elements' edges and centres, the figure's
+  edges and centre, and guides; arrow keys nudge 0.5 mm (⇧ 5 mm, ⌥ 0.1 mm); ⌘ while dragging turns snapping off.
+- Resize handles (⇧ keeps proportions; pictures keep theirs), line end handles (⇧ snaps to 45°).
+- Tools: text (T), line (L), arrow (A), rectangle (R), ellipse (E), significance bracket (B); V to select.
+- Double-click text or a label to retype it in place; double-click a panel to open its code.
+- Align (left, centre, right, top, middle, bottom) to the selection, the first selected or the figure; distribute
+  with equal gaps or a fixed gap; match width/height; group/ungroup; bring to front/send to back (= the order of the
+  code). Guides: drag from a ruler.
+- Inspector: position and size in mm, each element's settings, the figure size (with journal widths), the shared
+  style and the label style. Layers list, figure thumbnails, preflight list.
+- Drop PNG/TIFF/JPEG/PDF/SVG files or `.py` panel files onto the canvas.
+- Code pane (⌥⌘C) with the figure, style and panel files; ⌘S applies. Undo (⌘Z) undoes canvas and code-pane
+  edits; an undo leaves alone lines an agent has changed since.
+- Terminals (⌥⌘T) in the project folder, with a **Run claude** button (or Codex, Gemini CLI, any command).
+
+## Working with an agent
+
+When a project opens, Fignimble writes `CLAUDE.md`, `AGENTS.md` and `GEMINI.md` into it (only where the project has
+none of its own, and removes them on close). They tell the agent how a project is laid out, to keep positions
+literal so they stay draggable, never to draw panel letters itself, to leave fonts and sizes to the style, and how to
+look at its own work:
+
+```bash
+fignimble snapshot fig1.py      # render to .fignimble/snapshots/fig1.png and print the path (an agent can read the picture)
+fignimble info fig1.py          # every element's box in mm, the labels, preflight warnings
+fignimble check                 # preflight every figure; exit status 1 on problems
+fignimble export fig1.py fig1.pdf --dpi 600
+fignimble new myfigures --journal cell
+fignimble journals
+```
+
+## Install
+
+macOS 13 or later with Xcode (or its command line tools) and Python 3.10+.
+
+```bash
+./install_fignimble.sh          # Python environment in ~/Library/Application Support/Fignimble/python, the app in
+                             # ~/Applications, the fignimble command in ~/.local/bin
+open ~/Applications/Fignimble.app --args "$PWD/examples/demo"
+```
+
+For development: `python3 -m venv .venv && .venv/bin/pip install -r engine/requirements.txt pytest`, then
+`apps/macos/build_app.sh` (the app finds the checkout's `.venv`) and `.venv/bin/python -m pytest tests`. Running the
+debug binary with `FIGNIMBLE_SHOTS=<folder>` walks through the editor on a project (give it a copy) and saves pictures of
+the window.
+
+## Layout
+
+```
+engine/fignimble/   api.py       the figure language (Figure, Labels, Style)
+                 layout.py    patchwork-style layouts: rows, columns, grids and designs as grids of tracks
+                 render.py    runs figure and panel code, lines up plot areas, collects legends, composes with
+                              PyMuPDF, sprites, preflight, export, dark versions
+                 srcedit.py   canvas edits -> minimal source patches through Python's syntax tree
+                 core.py      session: render worker, edit operations, undo, watching the project
+                 rpc.py       JSON lines over stdio for the app (docs/protocol.md)
+                 cli.py       the fignimble command
+apps/macos/      the macOS app (Swift, AppKit, SwiftTerm)
+examples/demo/   a project to try
+tests/           engine tests
+```
