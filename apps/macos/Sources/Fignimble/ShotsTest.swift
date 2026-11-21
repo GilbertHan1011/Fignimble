@@ -8,7 +8,9 @@ extension MainController {
         guard let dir = ProcessInfo.processInfo.environment["FIGNIMBLE_SHOTS"] else { return }
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         Task { @MainActor in
-            for _ in 0..<300 where figure == nil { try? await Task.sleep(nanoseconds: 100_000_000) }
+            // with FIGNIMBLE_TEST_SETUP the Python is set up first, which takes a while
+            let wait = ProcessInfo.processInfo.environment["FIGNIMBLE_TEST_SETUP"] != nil ? 3000 : 300
+            for _ in 0..<wait where figure == nil { try? await Task.sleep(nanoseconds: 100_000_000) }
             try? await Task.sleep(nanoseconds: 800_000_000)
             if ProcessInfo.processInfo.environment["FIGNIMBLE_SHOTS_SCENE"] == "layout" { await layoutShots(dir); return }
             if ProcessInfo.processInfo.environment["FIGNIMBLE_SHOTS_SCENE"] == "features" { await featureShots(dir); return }

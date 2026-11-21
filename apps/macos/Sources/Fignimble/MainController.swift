@@ -186,7 +186,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
     func start(open url: URL?) {
         Task {
             let found = await Task.detached { Engine.findPython() }.value
-            guard let py = found else { missingPython(); return }
+            guard let py = found else { missingPython(then: url); return }
             python = py
             TerminalSession.python = py
             do { try engine.start(python: py) } catch { alert("Couldn't start the engine", error.localizedDescription); return }
@@ -203,12 +203,46 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         }
     }
 
-    private func missingPython() {
+    /// No Python that can render: offer to set one up (setup_python.sh, a minute or two), or to choose one.
+    private func missingPython(then url: URL?) {
         let a = NSAlert()
-        a.messageText = "Fignimble needs Python with matplotlib and PyMuPDF"
-        a.informativeText = "Run install_fignimble.sh in the Fignimble folder, or install them into a Python of your own:\n\npython3 -m pip install matplotlib pymupdf pillow numpy\n\nthen open Fignimble again. (Fignimble looks at $FIGNIMBLE_PYTHON, ~/Library/Application Support/Fignimble/python, the checkout's .venv and the Pythons on your PATH.)"
-        a.addCopyButton()
-        a.runModal()
+        a.messageText = "Fignimble needs to set up Python"
+        a.informativeText = "Fignimble draws figures with Python (matplotlib and PyMuPDF). Set Up Python downloads Python 3.11 and those packages into ~/Library/Application Support/Fignimble (about 260 MB, usually under a minute). Nothing else on your Mac changes and no password is needed.\n\nOr choose a Python of your own that has matplotlib, pymupdf, pillow and numpy installed."
+        a.addButton(withTitle: "Set Up Python")
+        a.addButton(withTitle: "Choose a Python…")
+        a.addButton(withTitle: "Quit")
+        // FIGNIMBLE_TEST_SETUP: a headless check of the setup, as if Set Up Python were pressed
+        let test = ProcessInfo.processInfo.environment["FIGNIMBLE_TEST_SETUP"] != nil
+        switch test ? .alertFirstButtonReturn : a.runModal() {
+        case .alertFirstButtonReturn:
+            PythonSetup.run(over: window) { [weak self] ok in
+                guard let self else { return }
+                guard ok else { if !test { self.missingPython(then: url) }; return }
+                // start with the Python just made; if even that can't render, say so rather than offer the setup again
+                if Engine.canImportEngineNeeds(PythonSetup.python) {
+                    UserDefaults.standard.set(PythonSetup.python, forKey: "python")
+                    self.start(open: url)
+                } else {
+                    self.alert("Python was set up but can't draw figures",
+                               "\(PythonSetup.python) can't import matplotlib, pymupdf and PIL. The log is ~/Library/Logs/fignimble.log.")
+                }
+            }
+        case .alertSecondButtonReturn:
+            let o = NSOpenPanel()
+            o.message = "A python3 with matplotlib, pymupdf, pillow and numpy (for example a conda or venv's bin/python3)"
+            o.canChooseFiles = true; o.treatsFilePackagesAsDirectories = true; o.showsHiddenFiles = true
+            if o.runModal() == .OK, let u = o.url {
+                if Engine.canImportEngineNeeds(u.path) {
+                    UserDefaults.standard.set(u.path, forKey: "python")
+                    start(open: url)
+                } else {
+                    let b = NSAlert(); b.messageText = "That Python can't import matplotlib, pymupdf and PIL"
+                    b.informativeText = u.path; b.runModal()
+                    missingPython(then: url)
+                }
+            } else { missingPython(then: url) }
+        default: NSApp.terminate(nil)
+        }
     }
 
     private func event(_ e: [String: Any]) {

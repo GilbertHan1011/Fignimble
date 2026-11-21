@@ -203,8 +203,10 @@ fignimble journals
 
 **Download:** the disk image `Fignimble-<version>-macOS.dmg` from the
 [latest release](https://github.com/pachterlab/Fignimble/releases/latest) (universal, macOS 13+, signed and notarized):
-open it and drag Fignimble to Applications. The app needs a Python 3.10+ with matplotlib, PyMuPDF and Pillow
-(`pip install matplotlib pymupdf pillow numpy`).
+open it and drag Fignimble to Applications. The first time it opens it offers to **Set Up Python**: it downloads
+Python 3.11 with matplotlib, PyMuPDF, Pillow, NumPy and BioCartoon into `~/Library/Application Support/Fignimble`
+(about 260 MB, a minute or less, no password; `apps/macos/setup_python.sh` does it). Or choose a Python of your own
+that has them (`pip install matplotlib "pymupdf<2" pillow numpy`).
 
 **From source:** macOS 13 or later with Xcode (or its command line tools) and Python 3.10+.
 
