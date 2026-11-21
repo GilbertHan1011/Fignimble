@@ -2,7 +2,7 @@ import AppKit
 
 @main
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var controller: MainController!
     private var launchURL: URL?
 
@@ -39,6 +39,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return nil
     }
 
+    /// File ▸ Open Recent: the projects opened lately (filled in each time it opens).
+    private func recentMenu() -> NSMenuItem {
+        let i = NSMenuItem(title: "Open Recent", action: nil, keyEquivalent: "")
+        let m = NSMenu(title: "Open Recent")
+        m.delegate = self
+        i.submenu = m
+        return i
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        guard menu.title == "Open Recent" else { return }
+        menu.removeAllItems()
+        let recent = MainController.recentProjects
+        let names = recent.map { ($0 as NSString).lastPathComponent }
+        for p in recent {
+            let name = (p as NSString).lastPathComponent
+            // the same folder name twice: say where each is
+            let title = names.filter { $0 == name }.count > 1 ? "\(name) — \((p as NSString).deletingLastPathComponent.replacingOccurrences(of: NSHomeDirectory(), with: "~"))" : name
+            let it = NSMenuItem(title: title, action: #selector(MainController.openRecent(_:)), keyEquivalent: "")
+            it.representedObject = p; it.toolTip = p
+            it.image = NSWorkspace.shared.icon(forFile: p); it.image?.size = NSSize(width: 16, height: 16)
+            menu.addItem(it)
+        }
+        if recent.isEmpty { menu.addItem(NSMenuItem(title: "No Recent Projects", action: nil, keyEquivalent: "")) }
+        menu.addItem(.separator())
+        let clear = NSMenuItem(title: "Clear Menu", action: recent.isEmpty ? nil : #selector(MainController.clearRecent(_:)), keyEquivalent: "")
+        menu.addItem(clear)
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         controller.confirmClose() ? .terminateNow : .terminateCancel
     }
@@ -71,7 +100,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         item("Quit Fignimble", #selector(NSApplication.terminate(_:)), "q", to: NSApp)])
         menu("File", [item("New Project…", #selector(MainController.newProject(_:)), "n", [.command, .shift]),
                       item("New Figure…", #selector(MainController.newFigure(_:)), "n"),
-                      item("Open Project…", #selector(MainController.openProject(_:)), "o"), sep(),
+                      item("Open Project…", #selector(MainController.openProject(_:)), "o"), recentMenu(), sep(),
                       item("Apply Code Changes", #selector(MainController.saveCode(_:)), "s"),
                       item("Show Project in Finder", #selector(MainController.revealProject(_:))), sep(),
                       item("Export Figure…", #selector(MainController.exportFigure(_:)), "e"),

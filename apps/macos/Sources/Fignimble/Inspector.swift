@@ -172,7 +172,20 @@ final class Inspector: NSView {
         clear()
         guard let m = main, let f = m.figure else {
             add(sectionLabel("Fignimble"))
-            note(main?.project == nil ? "Open a project (File ▸ Open Project…) or make one (File ▸ New Project…)." : "No figure.")
+            guard let m = main, m.project == nil else { note("No figure."); return }
+            note("Open a project or make one. A project is a folder of figures, each a Python file.")
+            row([("", button("New Project…", symbol: "plus") { m.newProject(nil) }), ("", button("Open Project…", symbol: "folder") { m.openProject(nil) })])
+            let recent = MainController.recentProjects.prefix(6)
+            if !recent.isEmpty {
+                section("Recent")
+                for p in recent {
+                    let b = button((p as NSString).lastPathComponent, symbol: "clock") {
+                        let it = NSMenuItem(); it.representedObject = p; m.openRecent(it)
+                    }
+                    b.toolTip = p; b.bezelStyle = .recessed
+                    add(b)
+                }
+            }
             return
         }
         if let err = f.error {

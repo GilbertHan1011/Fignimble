@@ -215,10 +215,10 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
             }
             if let j = try? await engine.json("journals") { journals = j.compactMapValues { $0 as? [String: Any] } }
             runShotsIfAsked()
+            // a project only when one was opened with the app (a figure file or folder double-clicked, dropped on
+            // its icon, or given on the command line); otherwise it starts empty: File ▸ Open Recent has the last ones
             if let u = url { openProject(at: u) }
-            else if let last = UserDefaults.standard.string(forKey: "lastProject"), FileManager.default.fileExists(atPath: last) {
-                openProject(at: URL(fileURLWithPath: last))
-            } else { inspector.update(); status.stringValue = "Open a project (⌘O) or make a new one (⇧⌘N)." }
+            else { inspector.update(); status.stringValue = "Open a project (⌘O), one of File ▸ Open Recent, or make a new one (⇧⌘N)." }
         }
     }
 
@@ -298,7 +298,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
                 let r = try await engine.json("open", ["project": dir.path])
                 project = r["project"] as? String ?? dir.path
             } catch { alert("Couldn't open \(dir.lastPathComponent)", error.localizedDescription); return }
-            UserDefaults.standard.set(project, forKey: "lastProject")
+            MainController.noteRecent(project ?? dir.path)
             NSDocumentController.shared.noteNewRecentDocumentURL(dir)
             window.title = "Fignimble — " + dir.lastPathComponent
             window.representedURL = dir
@@ -878,6 +878,27 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
     }
 
     // MARK: files
+
+    // MARK: recent projects
+
+    /// Projects opened lately, newest first (File ▸ Open Recent, and the empty window's buttons).
+    static var recentProjects: [String] {
+        let d = UserDefaults.standard
+        // before Open Recent there was only the last project
+        let r = d.stringArray(forKey: "recentProjects") ?? d.string(forKey: "lastProject").map { [$0] } ?? []
+        return r.filter { FileManager.default.fileExists(atPath: $0) }
+    }
+    static func noteRecent(_ path: String) {
+        var r = (UserDefaults.standard.stringArray(forKey: "recentProjects") ?? []).filter { $0 != path }
+        r.insert(path, at: 0)
+        UserDefaults.standard.set(Array(r.prefix(12)), forKey: "recentProjects")
+    }
+    @objc func openRecent(_ sender: NSMenuItem) {
+        guard let p = sender.representedObject as? String else { return }
+        guard FileManager.default.fileExists(atPath: p) else { toast("\(p) is no longer there", error: true); return }
+        openProject(at: URL(fileURLWithPath: p))            // which applies unsaved code first, as Open Project does
+    }
+    @objc func clearRecent(_ sender: Any?) { UserDefaults.standard.removeObject(forKey: "recentProjects") }
 
     @objc func openProject(_ sender: Any?) {
         let p = NSOpenPanel()

@@ -8,6 +8,7 @@ extension MainController {
         guard let dir = ProcessInfo.processInfo.environment["FIGNIMBLE_SHOTS"] else { return }
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         Task { @MainActor in
+            if ProcessInfo.processInfo.environment["FIGNIMBLE_SHOTS_SCENE"] == "blank" { await blankShots(dir); return }
             // with FIGNIMBLE_TEST_SETUP the Python is set up first, which takes a while
             let wait = ProcessInfo.processInfo.environment["FIGNIMBLE_TEST_SETUP"] != nil ? 3000 : 300
             for _ in 0..<wait where figure == nil { try? await Task.sleep(nanoseconds: 100_000_000) }
@@ -293,6 +294,23 @@ extension MainController {
         await settle(); report("asked 1280x780"); shot(dir, "S1-1280")
         window.setFrame(NSRect(x: 0, y: 0, width: 1100, height: 700), display: true)
         await settle(); report("asked 1100x700"); shot(dir, "S2-1100")
+        NSApp.terminate(nil)
+    }
+
+    /// Started with no project: the empty window, File ▸ Open Recent, then a recent project opened from it.
+    private func blankShots(_ dir: String) async {
+        try? await Task.sleep(nanoseconds: 4_000_000_000)
+        shot(dir, "B1-empty")
+        let file = NSApp.mainMenu?.items.first { $0.title == "File" }?.submenu
+        let recent = file?.items.first { $0.title == "Open Recent" }
+        if let m = recent?.submenu { m.delegate?.menuNeedsUpdate?(m) }
+        Engine.note("blank: project \(project ?? "none") figure \(figure?.name ?? "none"); Open Recent: \(recent?.submenu?.items.map(\.title) ?? ["missing"])")
+        if let first = recent?.submenu?.items.first, first.action != nil {
+            openRecent(first)
+            for _ in 0..<100 where figure == nil { try? await Task.sleep(nanoseconds: 100_000_000) }
+            await settle(); shot(dir, "B2-opened-recent")
+            Engine.note("blank: opened \(project ?? "none") figure \(figure?.name ?? "none")")
+        }
         NSApp.terminate(nil)
     }
 
