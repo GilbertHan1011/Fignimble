@@ -18,6 +18,7 @@ extension MainController {
             if ProcessInfo.processInfo.environment["FIGNIMBLE_SHOTS_SCENE"] == "colors" { await colorShots(dir); return }
             if ProcessInfo.processInfo.environment["FIGNIMBLE_SHOTS_SCENE"] == "parts" { await partShots(dir); return }
             if ProcessInfo.processInfo.environment["FIGNIMBLE_SHOTS_SCENE"] == "more" { await moreShots(dir); return }
+            if ProcessInfo.processInfo.environment["FIGNIMBLE_SHOTS_SCENE"] == "size" { await sizeShots(dir); return }
             shot(dir, "01-figure")
             canvas.selection = ["1"]
             await settle(); shot(dir, "02-panel-selected")
@@ -277,6 +278,21 @@ extension MainController {
             let e = canvas.selection.first.flatMap { figure?.element($0) }
             Engine.note("more: import \(r["ok"] ?? "-") \(r["error"] ?? "") origin \(e.flatMap { remoteOrigin(of: $0) } ?? "-") error \(e?.error ?? "none") menu \(contextMenu().items.map(\.title).filter { $0.contains("Server") })")
         }
+        NSApp.terminate(nil)
+    }
+
+    /// How wide the window has to be: its frame, the screen's, the narrowest the tool bar allows; then 1280 x 780.
+    private func sizeShots(_ dir: String) async {
+        func report(_ what: String) {
+            let bar = window.contentView?.descendants(NSStackView.self).first { $0.arrangedSubviews.contains { $0 is NSSegmentedControl } }
+            Engine.note("size \(what): window \(Int(window.frame.width))x\(Int(window.frame.height)), screen visible \(Int(window.screen?.visibleFrame.width ?? 0))x\(Int(window.screen?.visibleFrame.height ?? 0)), "
+                + "tool bar needs \(Int(bar?.fittingSize.width ?? -1)), navigator \(Int(navigator.frame.width)), inspector \(Int(rightHost.frame.width)), canvas \(Int(canvas.frame.width))")
+        }
+        report("at launch")
+        window.setFrame(NSRect(x: 0, y: 0, width: 1280, height: 780), display: true)
+        await settle(); report("asked 1280x780"); shot(dir, "S1-1280")
+        window.setFrame(NSRect(x: 0, y: 0, width: 1100, height: 700), display: true)
+        await settle(); report("asked 1100x700"); shot(dir, "S2-1100")
         NSApp.terminate(nil)
     }
 

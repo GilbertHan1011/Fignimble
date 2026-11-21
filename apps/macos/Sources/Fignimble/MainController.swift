@@ -161,15 +161,23 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         zoomLabel.font = Theme.mono(10.5); zoomLabel.textColor = Theme.ink(0.6); zoomLabel.alignment = .center
         zoomLabel.widthAnchor.constraint(equalToConstant: 46).isActive = true
         let spacer = NSView(); spacer.setContentHuggingPriority(.init(1), for: .horizontal)
-        let row = NSStackView(views: [toolControl, sep(), panel, image, icons, sep(), alignStack, spacer,
-                                      b("minus.magnifyingglass", "Zoom out (⌘-)", #selector(zoomOut(_:))), zoomLabel,
-                                      b("plus.magnifyingglass", "Zoom in (⌘+)", #selector(zoomIn(_:))),
-                                      b("arrow.up.left.and.down.right.magnifyingglass", "Fit the figure (⌘0)", #selector(zoomFit(_:))), sep(),
-                                      b("moon", "Dark version of the figure, for talks (⌥⌘D)", #selector(toggleDarkPreview(_:))),
-                                      b("chevron.left.forwardslash.chevron.right", "The code of the figure and of what is selected (⌥⌘C)", #selector(showCodePane(_:))),
-                                      b("terminal", "Terminal for a coding agent (⌥⌘T)", #selector(showTerminal(_:))),
-                                      b("square.and.arrow.up", "Export the figure (⌘E)", #selector(exportFigure(_:)))])
+        let alignSep = sep()
+        let zoom = [b("minus.magnifyingglass", "Zoom out (⌘-)", #selector(zoomOut(_:))), zoomLabel,
+                    b("plus.magnifyingglass", "Zoom in (⌘+)", #selector(zoomIn(_:))),
+                    b("arrow.up.left.and.down.right.magnifyingglass", "Fit the figure (⌘0)", #selector(zoomFit(_:)))]
+        let zoomSep = sep()
+        let extras = [b("moon", "Dark version of the figure, for talks (⌥⌘D)", #selector(toggleDarkPreview(_:))),
+                      b("chevron.left.forwardslash.chevron.right", "The code of the figure and of what is selected (⌥⌘C)", #selector(showCodePane(_:))),
+                      b("terminal", "Terminal for a coding agent (⌥⌘T)", #selector(showTerminal(_:))),
+                      b("square.and.arrow.up", "Export the figure (⌘E)", #selector(exportFigure(_:)))]
+        let row = NSStackView(views: [toolControl, sep(), panel, image, icons, alignSep, alignStack, spacer] + zoom + [zoomSep] + extras)
         row.spacing = 8; row.alignment = .centerY
+        // on a narrow screen (a 13" MacBook Air) what the menus also offer steps aside, so the window fits:
+        // the align buttons first, then zoom, then dark/code/terminal/export
+        for v in [alignSep, alignStack] { row.setVisibilityPriority(.init(rawValue: 300), for: v) }
+        for v in zoom + [zoomSep] { row.setVisibilityPriority(.init(rawValue: 500), for: v) }
+        for v in extras { row.setVisibilityPriority(.init(rawValue: 700), for: v) }
+        row.setClippingResistancePriority(.defaultLow, for: .horizontal)     // so it may be narrower than all of them
         row.translatesAutoresizingMaskIntoConstraints = false
         bar.addSubview(row)
         NSLayoutConstraint.activate([
@@ -179,7 +187,18 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         return bar
     }
 
-    func showWindow() { window.makeKeyAndOrderFront(nil); if window.frame.origin == .zero { window.center() } }
+    func showWindow() {
+        // inside the screen, whatever size was saved or asked for (1440 x 900 is more than a 13" MacBook Air shows)
+        if let vis = (window.screen ?? NSScreen.main)?.visibleFrame {
+            var f = window.frame
+            f.size.width = min(f.width, vis.width); f.size.height = min(f.height, vis.height)
+            f.origin.x = min(max(f.minX, vis.minX), vis.maxX - f.width)
+            f.origin.y = min(max(f.minY, vis.minY), vis.maxY - f.height)
+            window.setFrame(f, display: false)
+        }
+        window.makeKeyAndOrderFront(nil)
+        if window.frame.origin == .zero { window.center() }
+    }
 
     // MARK: engine
 
@@ -1001,9 +1020,12 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         let format = NSPopUpButton(frame: .zero, pullsDown: false)
         let formats = ["pdf", "eps", "tiff", "svg", "png", "jpg"]
         format.addItems(withTitles: ["PDF (vector)", "EPS (vector)", "TIFF", "SVG (vector)", "PNG", "JPEG"])
-        let dpis = [300, 500, 600, 1000, 1200]
-        let dpi = NSPopUpButton(frame: .zero, pullsDown: false)
-        dpi.addItems(withTitles: dpis.map { "\($0) dpi" }); dpi.selectItem(at: 2)
+        // any resolution, typed or picked; the journal's minimum is applied by the engine
+        let dpis = [300, 500, 600, 1000, 1200, 2400]
+        let dpi = NSComboBox()
+        dpi.addItems(withObjectValues: dpis.map { "\($0)" }); dpi.stringValue = "600"; dpi.numberOfVisibleItems = 6
+        dpi.widthAnchor.constraint(equalToConstant: 70).isActive = true
+        let dpiValue = { () -> Int in max(72, min(4800, Int(dpi.stringValue.filter(\.isNumber)) ?? 600)) }
         // the journal whose resolutions the export meets: the style's, or another
         let keys: [String?] = [nil, "nature", "science", "cell", "pnas", "elife"]
         let styleJournal = f.style["journal"] as? String
@@ -1021,13 +1043,12 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
             let fmt = formats[format.indexOfSelectedItem]
             let d = self.journalDPI(keys[journal.indexOfSelectedItem])
             let raster = ["tiff", "png", "jpg"].contains(fmt)
-            dpi.isEnabled = raster
-            if pickDPI, raster, let i = dpis.firstIndex(where: { $0 >= (pictures ? d.combination : d.line) }) { dpi.selectItem(at: i) }
+            if pickDPI { dpi.stringValue = "\(raster ? (pictures ? d.combination : d.line) : 600)" }
             let who = journal.titleOfSelectedItem ?? ""
             let need = "\(who): \(d.line) dpi for line art, \(d.combination) for figures with pictures, \(d.photo) for the pictures in a vector file."
             note.stringValue = need + (raster
                 ? " This figure \(pictures ? "has pictures" : "is line art"): a lower setting is raised to \(pictures ? d.combination : d.line) dpi (except PNG)."
-                : " Vector stays sharp at any size; pictures inside below \(d.photo) dpi are reported.")
+                : " Vector stays sharp at any size; the resolution is that of what panels draw as pixels (heatmaps, dense scatters)\(fmt == "eps" ? " and of what EPS has to rasterize" : ""), at least \(d.photo) dpi; pictures placed from files keep their own pixels, and those below \(d.photo) dpi are reported.")
                 + " The file is measured once written."
             p.allowedContentTypes = [UTType(filenameExtension: fmt) ?? .data]
             p.nameFieldStringValue = name + "." + fmt
@@ -1043,7 +1064,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         darkBox.state = darkPreview ? .on : .off
         darkBox.toolTip = "White text and lines on black, for slides"
         let top = NSStackView(views: [NSTextField(labelWithString: "Format:"), format, NSTextField(labelWithString: "For:"), journal,
-                                      NSTextField(labelWithString: "Resolution:"), dpi])
+                                      NSTextField(labelWithString: "Resolution:"), dpi, NSTextField(labelWithString: "dpi")])
         let boxes = NSStackView(views: [cmykBox, outlineBox, darkBox])
         let acc = NSStackView(views: [top, boxes, note]); acc.orientation = .vertical; acc.alignment = .leading
         acc.edgeInsets = NSEdgeInsets(top: 8, left: 8, bottom: 8, right: 8)
@@ -1053,7 +1074,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         p.beginSheetModal(for: window) { [weak self] r in
             _ = fmtAction
             guard let self, r == .OK, let u = p.url else { return }
-            let fmt = formats[format.indexOfSelectedItem], d = dpis[dpi.indexOfSelectedItem]
+            let fmt = formats[format.indexOfSelectedItem], d = dpiValue()
             let dark = darkBox.state == .on, cmyk = cmykBox.state == .on, outline = outlineBox.state == .on
             var args: [String: Any] = ["figure": name, "path": u.path, "format": fmt, "dpi": d, "dark": dark, "cmyk": cmyk, "outline": outline]
             if let j = keys[journal.indexOfSelectedItem] { args["journal"] = j }

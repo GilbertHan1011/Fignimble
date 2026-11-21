@@ -122,8 +122,8 @@ class Labels:
 
     format    the label around the letter: "{}" -> a, "({})" -> (a), "{})" -> a), "{}." -> a.
     case      "lower" or "upper"
-    numbering "alpha" (a, b, c), "roman" (i, ii, iii), "arabic" (1, 2, 3) or "none" (no letters; a panel's own
-              label="a'" still shows)
+    numbering "alpha" (a, b, c), "roman" (i, ii, iii), "arabic" (1, 2, 3) or "none" (no panel letters at all,
+              a panel's own label="a'" included)
     font, size (pt), weight ("bold" or "normal"), style ("normal" or "italic"), color
     dx, dy    where a label sits, in mm from its panel's top-left corner (negative: outside, to the left / above)
     order     "reading" (rows top to bottom, then left to right) or "source" (the order of the code)

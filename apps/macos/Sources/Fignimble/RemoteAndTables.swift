@@ -7,7 +7,7 @@ import UniformTypeIdentifiers
 extension MainController {
     // MARK: labels
 
-    /// Labels ▸ No Letters: no automatic panel letters (again: letters back). A panel's own label still shows.
+    /// Labels ▸ No Letters: no panel letters at all, a panel's own label included (again: letters back).
     @objc func labelsNone(_ sender: Any?) {
         let none = figure?.labelStyle["numbering"] as? String == "none"
         edit(["op": "labels", "props": ["numbering": none ? "alpha" : "none"]])

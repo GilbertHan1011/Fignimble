@@ -149,7 +149,8 @@ The app itself follows the system's light or dark appearance, or **View ▸ Appe
   pictures below 300 dpi at their printed size, Type 3 fonts, elements outside the figure, duplicate labels, and
   whether the width matches the journal's columns (Nature, Science, Cell, PNAS, eLife).
 - **Exports that meet journals' resolution rules**: vector PDF, EPS and SVG with real, editable TrueType text; TIFF
-  (LZW), JPEG and PNG at 300 to 1200 dpi. Export (⌘E) asks which journal (the style's by default): a TIFF or JPEG
+  (LZW), JPEG and PNG at any resolution (300 to 2400 offered; for PDF and EPS it is that of what panels draw as
+  pixels, such as heatmaps). Export (⌘E) asks which journal (the style's by default): a TIFF or JPEG
   below what it asks is raised to it, 1200 dpi for line art, 600 with pictures (Cell Press 1000/500), an EPS has what
   Ghostscript rasterizes drawn at the line-art dpi, and the file written is measured: its dpi, or every picture inside
   a PDF or EPS against the 300 dpi asked for photographs. `fignimble export fig1.py fig1.tiff --journal cell`.

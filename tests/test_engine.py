@@ -513,10 +513,28 @@ def test_tables(session, tmp_path):
 
 def test_no_panel_letters(session):
     edit(session, op="labels", props={"numbering": "none"})
-    r = session.render("fig1")
-    assert r["labels"] == []
+    assert session.render("fig1")["labels"] == []
+    # a panel's own label (fig3's inset has label="b") goes too
+    assert session.render("fig3")["labels"] == []
     session.undo({"figure": "fig1"})
     assert len(session.render("fig1")["labels"]) == 6
+    assert "b" in [l["text"] for l in session.render("fig3")["labels"]]
+
+
+def test_pdf_resolution_is_that_of_panel_rasters(session, tmp_path):
+    import pymupdf
+
+    def heatmap_dpi(path, box):
+        x, y, w, h = (v * 72 / 25.4 for v in box)
+        with pymupdf.open(path) as d:
+            return max((i["width"] / ((i["bbox"][2] - i["bbox"][0]) / 72) for i in d[0].get_image_info()
+                        if x - 1 <= i["bbox"][0] and i["bbox"][2] <= x + w + 1 and y - 1 <= i["bbox"][1] <= y + h), default=0)
+    box = next(e for e in session.render("fig1")["elements"] if e["oid"] == "2")["box"]       # the heatmap panel
+    r = session.export({"figure": "fig1", "path": str(tmp_path / "hi.pdf"), "dpi": 1200})
+    assert heatmap_dpi(tmp_path / "hi.pdf", box) > 1150
+    r = session.export({"figure": "fig1", "path": str(tmp_path / "lo.pdf"), "dpi": 150})
+    assert "raised to 300" in r["resolution"]["notes"][0]
+    assert 290 < heatmap_dpi(tmp_path / "lo.pdf", box) < 320
 
 
 def test_panel_from_ssh_server(session, tmp_path, monkeypatch):

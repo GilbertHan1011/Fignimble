@@ -110,6 +110,7 @@ class Renderer:
         self._docs: dict[str, pymupdf.Document] = {}
         self._cwd = Path.cwd()                   # rendering moves into the project; relative paths mean this one
         self.dark = False
+        self.raster_dpi = 600                    # what panels draw their rasters at (imshow, rasterized scatters)
 
     # --- running user code ---
 
@@ -228,7 +229,7 @@ class Renderer:
                 marks = _measure_marks(fig, h)
                 buf = io.BytesIO()
                 # rasters inside the panel (imshow, rasterized scatters) at print resolution
-                fig.savefig(buf, format="pdf", facecolor=background or "none", dpi=600)
+                fig.savefig(buf, format="pdf", facecolor=background or "none", dpi=self.raster_dpi)
             finally:
                 api._DARK[0] = False
                 plt.close("all")
@@ -240,7 +241,7 @@ class Renderer:
             code, fn, path, where = self._panel_code(props)
         except OSError as exc:
             return {"error": f"can't read panel code {props['source']}: {exc}"}
-        key = _h("panel", code, None if fn else props["source"], props["function"], props["args"], round(w, 3),
+        key = _h("panel", self.raster_dpi, code, None if fn else props["source"], props["function"], props["args"], round(w, 3),
                  round(h, 3), rc, deps, bool(collect), background, props.get("texts") or {}, props.get("colors") or {},
                  props.get("text_style") or {})
         pdf, meta = self.cache / "pieces" / f"{key}.pdf", self.cache / "pieces" / f"{key}.json"
@@ -838,6 +839,8 @@ class Renderer:
     def _labels(self, fig, panels, family):
         lab = fig.labels
         lp = lab.props
+        if lp["numbering"] == "none":                    # no panel letters at all, a panel's own label included
+            return [], []
         panels = [(e, oid, box) for e, oid, box in panels if not e.get("hidden")]
         auto = [(e, oid, box) for e, oid, box in panels if e.get("label") == "auto"]
         if lp["order"] == "reading":
@@ -1053,10 +1056,13 @@ class Renderer:
         converts colours for print (PDF, EPS, TIFF, JPEG); `outline` turns text into shapes (PDF, EPS, SVG).
         PDF/EPS conversions use Ghostscript.
 
-        Resolution follows `journal` (else the style's journal, else the usual standard; see journals.dpi): a
-        TIFF or JPEG is written at least at the dpi asked for line art, or for combination figures when the figure
-        holds pictures; an EPS has anything Ghostscript must rasterize drawn at the line-art dpi. The file written
-        is then measured, and pictures below the dpi asked for photographs are reported (`resolution`, warnings)."""
+        `dpi` is the resolution of everything drawn as pixels: the whole figure for TIFF, JPEG and PNG; for PDF and
+        EPS what panels draw as rasters (heatmaps, rasterized scatters) and what Ghostscript must rasterize for EPS
+        (pictures placed from files keep their own pixels). It is never below what `journal` asks (else the style's
+        journal, else the usual standard; see journals.dpi): the line-art dpi, or the combination dpi when the figure
+        holds pictures, for TIFF and JPEG; the photo dpi for rasters inside PDF and EPS, and the line-art dpi for
+        what Ghostscript rasterizes. The file written is then measured, and pictures below the dpi asked for
+        photographs are reported (`resolution`, warnings)."""
         self._docs.clear()
         self.dark = dark
         path = str(Path(path) if Path(path).is_absolute() else self._cwd / path)
@@ -1075,6 +1081,16 @@ class Renderer:
         if fmt in ("tif", "tiff", "jpg", "jpeg") and used < need[kind]:
             notes.append(f"{used} dpi raised to {need[kind]} dpi: {self._jname(journal)} that of {kind} figures")
             used = need[kind]
+        if fmt in ("pdf", "eps") and used != 600:
+            # panels' rasters at the resolution asked (never below the photo dpi): drawn again for this export
+            if used < need["photo"]:
+                notes.append(f"{used} dpi raised to {need['photo']} dpi: {self._jname(journal)} that of pictures")
+            self.raster_dpi = max(used, need["photo"])
+            try:
+                pieces, infos, labels = self.pieces(fig)
+                doc = self.compose(fig, pieces)
+            finally:
+                self.raster_dpi = 600
         if fmt in ("pdf", "eps"):
             doc.set_metadata({"creator": "Fignimble", "producer": "Fignimble (PyMuPDF)", "title": Path(file).stem})
             if fmt == "pdf" and not (cmyk or outline):
@@ -1083,7 +1099,7 @@ class Renderer:
                 with tempfile.TemporaryDirectory() as tmp:
                     src = str(Path(tmp) / "in.pdf")
                     doc.save(src, garbage=3, deflate=True)
-                    _ghostscript(src, path, fmt, cmyk, outline, dpi=need["line"])
+                    _ghostscript(src, path, fmt, cmyk, outline, dpi=max(used, need["line"]))
         elif fmt == "svg":
             Path(path).write_text(doc[0].get_svg_image(text_as_path=outline), encoding="utf-8")
         elif fmt in ("png", "tif", "tiff", "jpg", "jpeg"):
