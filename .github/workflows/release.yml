@@ -1,8 +1,9 @@
-# Builds Fignimble.app (universal), signs and notarizes it, and attaches it to the GitHub Release of its tag.
+# Builds Fignimble.app (universal), signs and notarizes it, and attaches it to the GitHub Release of its tag as a disk
+# image (Fignimble-<version>-macOS.dmg, notarized too) and a zip.
 #
 #   Release:      bump VERSION, commit, then  git tag v0.2.0 && git push origin v0.2.0
 #   Re-publish:   Actions -> release -> Run workflow (on main), with a tag (e.g. v0.1.0): builds main and replaces
-#                 that release's zip (how a release made before signing was set up gets a notarized app)
+#                 that release's disk image and zip (how a release made before signing was set up gets a notarized app)
 #
 # Signing and notarization need these repository secrets (the same ones Manimble's releases use; a paid Apple
 # Developer ID account): APPLE_CERTIFICATE (base64 .p12 "Developer ID Application" certificate),
@@ -76,13 +77,32 @@ jobs:
           spctl --assess --type execute --verbose=4 apps/macos/Fignimble.app
           rm notarize.zip
 
-      - name: Package
-        run: ditto -c -k --keepParent apps/macos/Fignimble.app "Fignimble-$VERSION-macOS.zip"
+      - name: Package (zip and disk image)
+        env:
+          FIGNIMBLE_SIGN_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          ditto -c -k --keepParent apps/macos/Fignimble.app "Fignimble-$VERSION-macOS.zip"
+          apps/macos/make_dmg.sh apps/macos/Fignimble.app "Fignimble-$VERSION-macOS.dmg"
+
+      # the disk image is notarized on its own, so it opens without a warning even before the app inside is checked
+      - name: Notarize and staple the disk image
+        if: env.HAS_CERT == 'true' && env.HAS_NOTARY == 'true'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          xcrun notarytool submit "Fignimble-$VERSION-macOS.dmg" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+          xcrun stapler staple "Fignimble-$VERSION-macOS.dmg"
+          xcrun stapler validate "Fignimble-$VERSION-macOS.dmg"
+          spctl --assess --type open --context context:primary-signature --verbose=4 "Fignimble-$VERSION-macOS.dmg"
 
       - uses: actions/upload-artifact@v4
         with:
           name: Fignimble-${{ env.VERSION }}-macOS
-          path: Fignimble-*-macOS.zip
+          path: |
+            Fignimble-*-macOS.zip
+            Fignimble-*-macOS.dmg
           if-no-files-found: error
 
       - name: Attach to the release
@@ -91,7 +111,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "Fignimble $VERSION" --notes "Fignimble $VERSION"
-          gh release upload "$TAG" "Fignimble-$VERSION-macOS.zip" --clobber
+          gh release upload "$TAG" "Fignimble-$VERSION-macOS.dmg" "Fignimble-$VERSION-macOS.zip" --clobber
 
       - name: Say why the release was left alone
         if: env.HAS_CERT != 'true' || env.HAS_NOTARY != 'true'

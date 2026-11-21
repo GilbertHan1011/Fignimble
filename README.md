@@ -176,7 +176,12 @@ fignimble journals
 
 ## Install
 
-macOS 13 or later with Xcode (or its command line tools) and Python 3.10+.
+**Download:** the disk image `Fignimble-<version>-macOS.dmg` from the
+[latest release](https://github.com/pachterlab/fignimble/releases/latest) (universal, macOS 13+, signed and notarized):
+open it and drag Fignimble to Applications. The app needs a Python 3.10+ with matplotlib, PyMuPDF and Pillow
+(`pip install matplotlib pymupdf pillow numpy`).
+
+**From source:** macOS 13 or later with Xcode (or its command line tools) and Python 3.10+.
 
 ```bash
 ./install_fignimble.sh          # Python environment in ~/Library/Application Support/Fignimble/python, the app in
