@@ -184,7 +184,10 @@ final class Inspector: NSView {
         }
         let sel = m.canvas.selection.compactMap { f.element($0) }
         if sel.isEmpty { figureSection(f) }
-        else if sel.count == 1 { elementSection(f, sel[0]) }
+        else if sel.count == 1 {
+            if let pt = m.canvas.part, pt.oid == sel[0].oid { partSection(f, sel[0], pt) }
+            elementSection(f, sel[0])
+        }
         else { multiSection(f, sel) }
     }
 
@@ -293,6 +296,38 @@ final class Inspector: NSView {
         }
     }
 
+    /// A text or mark inside a panel, picked on the canvas: retype it, set its size, colour and weight. The change
+    /// goes into the panel's code where the code writes it once, otherwise onto the panel's line (texts=, text_style=,
+    /// colors=).
+    private func partSection(_ f: FigureData, _ e: Element, _ pt: PanelPart) {
+        guard let m = main else { return }
+        // an inset's panel settings are its item's
+        let props = e.kind == "inset" ? e.item : e.props
+        if let t = m.canvas.partText(pt) {
+            section("\(t.role.prefix(1).uppercased() + t.role.dropFirst()) in the panel")
+            let style = { (p: [String: Any]) in m.edit(["op": "panel_text_style", "oid": e.oid, "key": t.key, "text": t.text, "props": p]) }
+            row([("Text", Field(t.text, width: 170) { m.edit(["op": "panel_text", "oid": e.oid, "key": t.key, "text": $0, "old": t.text]) })])
+            row([("Size", numberField(t.size, width: 44) { if $0 > 0 { style(["size": $0]) } }), ("pt", NSView())])
+            row([("Colour", color(t.color) { style(["color": $0]) })])
+            row([("", check("Bold", t.bold) { style(["weight": $0 ? "bold" : "normal"]) }),
+                 ("", check("Italic", t.italic) { style(["style": $0 ? "italic" : "normal"]) })])
+            let changed = (props["texts"] as? [String: Any])?[t.key] != nil || (props["text_style"] as? [String: Any])?[t.key] != nil
+            if changed { row([("", button("Back to What the Code Draws") { m.edit(["op": "panel_text_reset", "oid": e.oid, "key": t.key]) })]) }
+            note("Return or double-click retypes it on the canvas; Delete empties it; Esc goes back to the panel. A text the panel's code writes once (ax.set_xlabel(\"…\")) is changed there; any other is changed on the panel's line.")
+        } else if let mk = m.canvas.partMark(pt) {
+            section("Mark in the panel · \(mk.key.replacingOccurrences(of: "ax0.", with: ""))")
+            row([("Colour", color(mk.color) { m.edit(["op": "panel_color", "oid": e.oid, "keys": [mk.key], "color": $0, "old": mk.color]) })])
+            var colors = props["colors"] as? [String: Any] ?? [:]
+            if colors[mk.key] != nil {
+                row([("", button("Back to the Code's Colour") {
+                    colors.removeValue(forKey: mk.key)
+                    m.edit(["op": "set", "oid": e.oid, "props": ["colors": colors.isEmpty ? (NSNull() as Any) : colors]])
+                })])
+            }
+            note("A colour the panel's code writes once is changed there, so every mark drawn with it follows; otherwise only this mark changes (colors= on the panel's line). Esc goes back to the panel.")
+        }
+    }
+
     private func elementSection(_ f: FigureData, _ e: Element) {
         guard let m = main else { return }
         let label = f.labelText(e.oid)
@@ -328,7 +363,7 @@ final class Inspector: NSView {
                 let t = a.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: ", ")
                 note("arguments: \(t)")
             }
-            note("Resizing redraws the panel at its new size, so its text keeps its size. Double-click a text in the panel (an axis label, a tick, a legend entry) to retype it.")
+            note("Resizing redraws the panel at its new size, so its text keeps its size. Click a text in the panel (an axis label, a tick, a legend entry) or a line, bar or points to change it here; double-click a text to retype it.")
             row([("Turn", popup(["0°", "90°", "180°", "270°"], "\(Int(e.p("rotation") ?? 0))°", width: 70) { i, _ in
                 setp(["rotation": i == 0 ? (NSNull() as Any) : Double(i * 90)]) })])
             if let t = e.props["texts"] as? [String: Any], !t.isEmpty {

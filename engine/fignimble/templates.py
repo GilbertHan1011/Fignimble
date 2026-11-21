@@ -136,8 +136,8 @@ unit="µm", pixel_size=0.325)`, `fig.zoom(picture, inset, region=(x, y, w, h))` 
 picture is cropped to the region). Pictures take `rotation=` and `flip="h"`. `Style(palette={"WT": "#999999", ...})`
 sets the colours panels plot with (or a named one: `palette="okabe-ito"`, colour-blind safe); use `color("WT")` in
 panel code rather than repeating hex codes, and keep colour-blind readers in mind (`fignimble info` warns about colours
-they can't tell apart). A panel's `texts={"ax0.xlabel": "..."}` and `colors={"ax0.line1": "#..."}` hold texts and
-colours the user changed on the canvas: leave them alone, or move them into the panel's code and remove the entries. `locked=True` / `hidden=True` are the user's layer settings: keep them.
+they can't tell apart). A panel's `texts={"ax0.xlabel": "..."}`, `text_style={"ax0.legend0": {"size": 8, "color": "#...", "weight": "bold"}}`
+and `colors={"ax0.line1": "#..."}` hold texts, text settings and colours the user changed on the canvas: leave them alone, or move them into the panel's code and remove the entries. `locked=True` / `hidden=True` are the user's layer settings: keep them.
 
 Other options: `label=None` (no letter) or `label="a'"` on a panel; `fit=`/`crop=` on images; `group="g1"` to keep
 elements together; `fig.guide(x=91.5)` for an editor guide line. Run `python -c "import fignimble; help(fignimble.Figure)"`

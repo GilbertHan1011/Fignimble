@@ -20,6 +20,27 @@ struct PanelText {
     let box: CGRect           // mm
     let size: Double          // pt
     let rotation: Double
+    var color: String? = nil
+    var bold = false
+    var italic = false
+
+    /// What the text is, in words: "x-axis label", "legend entry", ...
+    var role: String {
+        let k = key.split(separator: ".").last.map(String.init) ?? key
+        let names: [(String, String)] = [("xlabel", "x-axis label"), ("ylabel", "y-axis label"), ("legendtitle", "legend title"),
+                                         ("ltitle", "title"), ("rtitle", "title"), ("title", "title"), ("xtick", "x tick label"),
+                                         ("ytick", "y tick label"), ("legend", "legend entry"), ("suptitle", "title"),
+                                         ("supxlabel", "x-axis label"), ("supylabel", "y-axis label"), ("text", "text")]
+        if let n = names.first(where: { k.hasPrefix($0.0) }) { return n.1 }
+        return key.contains("legend") ? "legend entry" : "text"
+    }
+}
+
+/// A text or a mark (line, bar, points) inside a panel, picked on the canvas for the inspector to change.
+struct PanelPart: Equatable {
+    let oid: String
+    let key: String
+    let isText: Bool
 }
 
 /// A boundary between two rows or columns of a layout, which can be dragged to resize them.
@@ -94,7 +115,8 @@ final class Element {
         item = d["item"] as? [String: Any] ?? [:]
         texts = (d["texts"] as? [[String: Any]] ?? []).compactMap { t in
             guard let k = t["key"] as? String, let b = Element.rect(t["box"]) else { return nil }
-            return PanelText(key: k, text: t["text"] as? String ?? "", box: b, size: num(t["size"]), rotation: num(t["rotation"]))
+            return PanelText(key: k, text: t["text"] as? String ?? "", box: b, size: num(t["size"]), rotation: num(t["rotation"]),
+                             color: t["color"] as? String, bold: t["bold"] as? Bool ?? false, italic: t["italic"] as? Bool ?? false)
         }
         marks = (d["marks"] as? [[String: Any]] ?? []).compactMap { m in
             guard let k = m["key"] as? String, let c = m["color"] as? String, let b = Element.rect(m["box"]) else { return nil }

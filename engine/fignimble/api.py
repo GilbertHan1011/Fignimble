@@ -269,10 +269,11 @@ class Panel(Node):
 
     def __init__(self, source, function: str = "draw", args: dict | None = None, label="auto",
                  label_dx: float | None = None, label_dy: float | None = None, texts: dict | None = None,
-                 colors: dict | None = None, rotation: float = 0, name: str | None = None):
+                 colors: dict | None = None, rotation: float = 0, name: str | None = None, text_style: dict | None = None):
         self.props = dict(source=source if callable(source) else str(source), function=function,
                           args=dict(args or {}), label=label, label_dx=label_dx, label_dy=label_dy,
-                          texts=dict(texts or {}), colors=dict(colors or {}), rotation=rotation, name=name)
+                          texts=dict(texts or {}), colors=dict(colors or {}), rotation=rotation, name=name,
+                          text_style=dict(text_style or {}))
         self.site = _site()
         self.method = "Panel"
 
@@ -451,7 +452,8 @@ class Figure:
 
     def panel(self, source, x: float = 0, y: float = 0, w: float = 80, h: float = 60, function: str = "draw",
               args: dict | None = None, label="auto", label_dx: float | None = None, label_dy: float | None = None,
-              texts: dict | None = None, colors: dict | None = None, rotation: float = 0, group: str | None = None, name: str | None = None, locked: bool = False, hidden: bool = False) -> Element:
+              texts: dict | None = None, colors: dict | None = None, rotation: float = 0, group: str | None = None, name: str | None = None, locked: bool = False, hidden: bool = False,
+              text_style: dict | None = None) -> Element:
         """A panel drawn by Python code. `source` is a .py file (path relative to the project) whose `function`
         (default `draw`) takes a matplotlib Figure of exactly w x h mm and draws on it, or a function itself:
 
@@ -463,8 +465,10 @@ class Figure:
         panel redraws it at the new size, so its text keeps its size. `label` is "auto" (the next letter), a
         string of your own ("a'"), or None (no label); `label_dx`/`label_dy` move this panel's label only.
         `texts` replaces texts the code draws ({"ax0.xlabel": "Time (min)", "ax0.xtick2": "10³"}), which is how
-        the editor retypes a text the code doesn't hold as a literal; `colors` likewise recolours lines, bars
-        and points ({"ax0.line1": "#0072B2"}); `rotation` turns the panel (90, 180, 270).
+        the editor retypes a text the code doesn't hold as a literal; `text_style` sets such a text's size, colour,
+        weight and slant ({"ax0.legend1": {"size": 8, "color": "#D55E00", "weight": "bold", "style": "italic"}});
+        `colors` likewise recolours lines, bars and points ({"ax0.line1": "#0072B2"}); `rotation` turns the panel
+        (90, 180, 270).
         """
         if callable(source):
             src = source
@@ -473,7 +477,7 @@ class Figure:
         return self._add("panel", "panel", dict(source=src, x=x, y=y, w=w, h=h, function=function, args=dict(args or {}),
                                                 label=label, label_dx=label_dx, label_dy=label_dy,
                                                 texts=dict(texts or {}), colors=dict(colors or {}), rotation=rotation,
-                                                group=group,
+                                                text_style=dict(text_style or {}), group=group,
                                                 name=name, locked=locked, hidden=hidden))
 
     def image(self, source: str, x: float = 0, y: float = 0, w: float = 60, h: float | None = None,

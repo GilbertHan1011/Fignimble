@@ -199,7 +199,8 @@ class Renderer:
             raise RuntimeError(f"{props['source']} has no function {props['function']}(fig)")
         return fn
 
-    def _draw_panel(self, fn, args, w, h, rc, collect, target=None, background=None, texts=None, colors=None):
+    def _draw_panel(self, fn, args, w, h, rc, collect, target=None, background=None, texts=None, colors=None,
+                    text_style=None):
         """Draw a panel: (pdf bytes, its plot area's margins in mm (l, t, r, b) or None, legend entries taken out,
         the texts it shows [{key, text, box (mm in the panel), size, rotation}])."""
         with matplotlib.rc_context(rc):
@@ -210,8 +211,9 @@ class Renderer:
                 _set_colors(fig, colors)
                 entries = _take_legends(fig) if collect else []
                 _set_texts(fig, texts, ticks=False)
+                _set_text_style(fig, text_style, ticks=False)
                 fig.canvas.draw()                    # lays it out (constrained layout), so the axes are where they go
-                if _set_texts(fig, texts, ticks=True):
+                if _set_texts(fig, texts, ticks=True) | _set_text_style(fig, text_style, ticks=True):
                     fig.canvas.draw()
                 area = _plot_area(fig)
                 margins = None
@@ -238,14 +240,16 @@ class Renderer:
         except OSError as exc:
             return {"error": f"can't read panel code {props['source']}: {exc}"}
         key = _h("panel", code, None if fn else props["source"], props["function"], props["args"], round(w, 3),
-                 round(h, 3), rc, deps, bool(collect), background, props.get("texts") or {}, props.get("colors") or {})
+                 round(h, 3), rc, deps, bool(collect), background, props.get("texts") or {}, props.get("colors") or {},
+                 props.get("text_style") or {})
         pdf, meta = self.cache / "pieces" / f"{key}.pdf", self.cache / "pieces" / f"{key}.json"
         if pdf.exists() and meta.exists():
             return {"pdf": str(pdf), "key": key, **json.loads(meta.read_text())}
         try:
             data, margins, entries, found, marks = self._draw_panel(self._panel_fn(props, fn, path), props["args"], w, h,
                                                                     rc, collect, background=background,
-                                                                    texts=props.get("texts"), colors=props.get("colors"))
+                                                                    texts=props.get("texts"), colors=props.get("colors"),
+                                                                    text_style=props.get("text_style"))
         except Exception:                               # noqa: BLE001
             return {"error": _user_traceback(where)}
         _write(pdf, data)
@@ -265,7 +269,7 @@ class Renderer:
             code, fn, path, where = self._panel_code(props)
             data, _, _, found, marks = self._draw_panel(self._panel_fn(props, fn, path), props["args"], w, h, rc,
                                                         collect, target, background, props.get("texts"),
-                                                        props.get("colors"))
+                                                        props.get("colors"), props.get("text_style"))
             _write(pdf, data)
             meta.write_text(json.dumps({"texts": found, "marks": marks}))
         return str(pdf), json.loads(meta.read_text())
@@ -1518,8 +1522,36 @@ def _set_texts(fig, texts, ticks: bool) -> bool:
     return changed
 
 
+_TEXT_PROPS = {"size": "fontsize", "color": "color", "weight": "fontweight", "style": "fontstyle"}
+
+
+def _set_text_style(fig, styles, ticks: bool) -> bool:
+    """Give texts the editor restyled their size, colour, weight and slant (tick labels after a first draw)."""
+    if not styles:
+        return False
+    arts = _text_artists(fig)
+    changed = False
+    for k, st in styles.items():
+        if ("tick" in k) != ticks or k not in arts or not isinstance(st, dict):
+            continue
+        t = arts[k]
+        for name, v in st.items():
+            if name in _TEXT_PROPS and v is not None:
+                getattr(t, "set_" + _TEXT_PROPS[name])(v)
+                changed = True
+    return changed
+
+
+def _is_bold(weight) -> bool:
+    if isinstance(weight, (int, float)):
+        return weight >= 600
+    return str(weight) in ("semibold", "demibold", "demi", "bold", "heavy", "extra bold", "black")
+
+
 def _measure_texts(fig, h) -> list:
-    """Where the panel's texts are: [{key, text, box (x, y, w, h mm from the panel's top-left), size, rotation}]."""
+    """Where the panel's texts are: [{key, text, box (x, y, w, h mm from the panel's top-left), size, rotation,
+    color, bold, italic}]."""
+    import matplotlib.colors as mcolors
     r = fig.canvas.get_renderer()
     out = []
     for k, t in _text_artists(fig).items():
@@ -1532,7 +1564,12 @@ def _measure_texts(fig, h) -> list:
         if b.width <= 0:
             continue
         d = fig.dpi
+        try:
+            color = mcolors.to_hex(t.get_color()).upper()
+        except ValueError:
+            color = None
         out.append({"key": k, "text": t.get_text(), "size": t.get_fontsize(), "rotation": t.get_rotation(),
+                    "color": color, "bold": _is_bold(t.get_fontweight()), "italic": t.get_fontstyle() in ("italic", "oblique"),
                     "box": [round(b.x0 / d * 25.4, 3), round(h - b.y1 / d * 25.4, 3), round(b.width / d * 25.4, 3),
                             round(b.height / d * 25.4, 3)]})
     return out[:400]

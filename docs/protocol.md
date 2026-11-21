@@ -19,10 +19,10 @@ Coordinates are millimetres from the figure's top-left corner, y down.
 | `edit` | `figure`, `op`, op arguments, `pxPerMM?` | `{ok, error?, figure, select?}`: the render after the edit, and the new elements to select |
 | `write_source` | `file`, `text`, `figure?` | `{ok, figure?}`; one undo step |
 | `undo`, `redo` | `figure?` | `{ok, label, figure}` or `{ok: false, error}` |
-| `export` | `figure`, `path`, `format?` (pdf, svg, png, tiff, jpg), `dpi?` | `{ok, path, warnings}` |
+| `export` | `figure`, `path`, `format?` (pdf, svg, png, tiff, jpg), `dpi?` | `{ok, path, warnings}`; the app's Copy Figure exports a PDF and a PNG this way for the pasteboard |
 | `new_figure` | `name`, `width`, `height` | `{ok, name}` |
 | `new_panel` | `figure`, `name`, `x, y, w, h` | as `edit`, plus `file` (the new panel file) |
-| `import_file` | `figure`, `path`, `x`, `y` | as `edit`; pictures are copied into `images/`, `.py` files become panels |
+| `import_file` | `figure`, `path`, `x`, `y`, `w?`, `label?` | as `edit`; pictures are copied into `images/`, `.py` files become panels; `label: null` gives no letter |
 | `journals` | | the journal presets |
 
 ## Edit operations
@@ -33,7 +33,10 @@ Coordinates are millimetres from the figure's top-left corner, y down.
 `distribute {oids, axis: h|v, gap?}`, `match {oids, what: width|height|both}`, `group {oids}`, `ungroup {oids}`,
 `insert {kind, props}`, `figure {props}`, `style {props}`, `labels {props}`, `guide_add {x | y}`,
 `guide_move {index, value}`, `guide_delete {index}`, `divider {oid (a layout), index (of its dividers), delta mm}`,
-`make_layout {oids, gap?}`, `release_layout {oid}`.
+`make_layout {oids, gap?}`, `release_layout {oid}`, `panel_text {oid, key, text, old}` (retype a text a panel draws),
+`panel_text_style {oid, key, text, props: {size?, color?, weight?, style?}}` (written into the panel's code when the
+text is the literal of one `ax.set_xlabel(...)`, `ax.text(...)`…, else `text_style=` on the panel), `panel_text_reset
+{oid, key}`, `panel_color {oid, keys, color, old}`.
 
 A panel inside a layout has a `parent` (the layout's oid, its own oid being `<layout>.<n>`); moving it moves the
 layout. A layout lists its `children` and its `dividers` (`{axis: col|row, index, at, from, to, sizes, editable}`).

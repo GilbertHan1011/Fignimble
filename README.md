@@ -89,8 +89,12 @@ STYLE = Style(..., palette={"WT": "#999999", "KO": "#d1495b"})     # color("KO")
 ```
 
 In the editor:
-- **Texts inside panels:** select a panel and its axis labels, ticks and legend entries are outlined. Double-click one
-  to retype it: a string literal in the panel's code is changed there, anything else becomes a `texts={...}` override.
+- **Texts and marks inside panels:** click an axis label, tick, legend entry or title of a panel (or a line, bar or
+  points of a selected panel) and the inspector edits it: its text, size, colour, bold and italic, or the mark's colour.
+  Double-click a text (or press Return) to retype it on the canvas; Delete empties it, Esc goes back to the panel. A
+  string literal in the panel's code is changed there (`ax.set_xlabel("UMAP 1", fontsize=9, color="#D55E00")`);
+  anything else becomes a `texts={...}` / `text_style={...}` override on the panel's line, which **Back to What the
+  Code Draws** removes.
 - **Crop** a picture by double-clicking it (or Object ▸ Crop Picture): the handles crop, outward uncrops.
 - **Zoom boxes** (Insert ▸ Zoom Box): on one picture, makes the magnified inset too; drag the box and the inset
   follows. **Scale bars** (Insert ▸ Scale Bar on Picture…).
@@ -110,7 +114,14 @@ In the editor:
   look alike with deuteranopia, protanopia or tritanopia; **View ▸ Colour Vision** shows the figure as those readers
   (or a greyscale print) would see it.
 - **Clipboard**: copy and paste between figures (a layout brings its panels; names are renumbered), Cut, and paste a
-  picture from another app (saved into `images/`).
+  picture from another app (saved into `images/`). **Edit ▸ Copy Figure as Picture** (⇧⌘C, or ⌘C with nothing
+  selected) puts the whole figure on the clipboard as vector PDF and a 600 dpi PNG, for Word, PowerPoint, Keynote,
+  Illustrator, mail or chat (the dark version when that is shown).
+- **BioCartoon icons** (Insert ▸ BioCartoon Icons…, ⇧⌘B, or the toolbar button), as in Manimble: search 15,000+
+  open-licensed science icons, filter by collection, category and licence, and drag one onto the figure (or
+  double-click it). It is saved into `images/` (SVG when published as one, so it stays vector) and placed without a
+  panel letter; right-click it for its credit. Needs the `biocartoon` command (`pip install biocartoon`; the pane
+  offers to install it, and uses Manimble's or the BioCartoon app's copy if there is one).
 - **Print**: export EPS, CMYK (PDF, EPS, TIFF, JPEG) and text as outlines (PDF, EPS, SVG); PDF/EPS conversions use
   Ghostscript (`brew install ghostscript`). `fignimble export fig1.py fig1.eps --cmyk --outline`.
 - Equal-spacing hints while dragging, **History** (⌥⌘⇧H: click a step to go back to it), **Replace…** for a picture's

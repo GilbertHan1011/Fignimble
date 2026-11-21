@@ -16,6 +16,9 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
     let history = HistoryView()
     let terminal = TerminalPanel()
     private(set) var drawer: BottomDrawer!
+    /// The inspector, or the BioCartoon search in its place.
+    let rightHost = NSView()
+    var biocartoonPane: BioCartoonPane?
     private let hRuler = RulerView(horizontal: true)
     private let vRuler = RulerView(horizontal: false)
     private let pill = Pill()
@@ -43,6 +46,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
     private var copiedStyle: [String: Any]?
     static let pasteType = NSPasteboard.PasteboardType("org.pachterlab.fignimble.code")
     private var drawerHeight: CGFloat = 260
+    var busyPill: Pill { pill }
 
     override init() {
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1440, height: 900),
@@ -102,7 +106,13 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         middle.addArrangedSubview(area); middle.addArrangedSubview(drawer)
         middle.setHoldingPriority(.init(260), forSubviewAt: 0); middle.setHoldingPriority(.init(270), forSubviewAt: 1)
         root.isVertical = true; root.dividerStyle = .thin
-        root.addArrangedSubview(navigator); root.addArrangedSubview(middle); root.addArrangedSubview(inspector)
+        inspector.translatesAutoresizingMaskIntoConstraints = false
+        rightHost.addSubview(inspector)
+        NSLayoutConstraint.activate([
+            inspector.leadingAnchor.constraint(equalTo: rightHost.leadingAnchor), inspector.trailingAnchor.constraint(equalTo: rightHost.trailingAnchor),
+            inspector.topAnchor.constraint(equalTo: rightHost.topAnchor), inspector.bottomAnchor.constraint(equalTo: rightHost.bottomAnchor),
+        ])
+        root.addArrangedSubview(navigator); root.addArrangedSubview(middle); root.addArrangedSubview(rightHost)
         root.setHoldingPriority(.init(270), forSubviewAt: 0); root.setHoldingPriority(.init(250), forSubviewAt: 1); root.setHoldingPriority(.init(270), forSubviewAt: 2)
         window.contentView = root
         DispatchQueue.main.async { [self] in
@@ -134,6 +144,10 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         panel.bezelStyle = .texturedRounded; panel.toolTip = "New panel drawn by Python code (⇧⌘P)"
         let image = NSButton(title: "Picture", image: NSImage(systemSymbolName: "photo", accessibilityDescription: nil)!, target: self, action: #selector(insertImage(_:)))
         image.bezelStyle = .texturedRounded; image.toolTip = "Place a picture: PNG, TIFF, JPEG, PDF or SVG (⇧⌘I)"
+        let logo = BioCartoonCLI.monoLogo.copy() as! NSImage
+        logo.size = NSSize(width: 16, height: 16)
+        let icons = NSButton(title: "BioCartoon", image: logo, target: self, action: #selector(showBioCartoon(_:)))
+        icons.bezelStyle = .texturedRounded; icons.toolTip = "Search BioCartoon's science icons and drag them onto the figure (⇧⌘B)"
         let aligns: [(String, String, Selector)] = [("align.horizontal.left", "Align left edges", #selector(alignLeft(_:))),
                                                     ("align.horizontal.center", "Align centres", #selector(alignCenter(_:))),
                                                     ("align.horizontal.right", "Align right edges", #selector(alignRight(_:))),
@@ -147,7 +161,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         zoomLabel.font = Theme.mono(10.5); zoomLabel.textColor = Theme.ink(0.6); zoomLabel.alignment = .center
         zoomLabel.widthAnchor.constraint(equalToConstant: 46).isActive = true
         let spacer = NSView(); spacer.setContentHuggingPriority(.init(1), for: .horizontal)
-        let row = NSStackView(views: [toolControl, sep(), panel, image, sep(), alignStack, spacer,
+        let row = NSStackView(views: [toolControl, sep(), panel, image, icons, sep(), alignStack, spacer,
                                       b("minus.magnifyingglass", "Zoom out (⌘-)", #selector(zoomOut(_:))), zoomLabel,
                                       b("plus.magnifyingglass", "Zoom in (⌘+)", #selector(zoomIn(_:))),
                                       b("arrow.up.left.and.down.right.magnifyingglass", "Fit the figure (⌘0)", #selector(zoomFit(_:))), sep(),
@@ -514,8 +528,39 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
     @objc func deleteSelected(_ sender: Any?) { if !sel.isEmpty { let s = sel; canvas.selection = []; edit(["op": "delete", "oids": s]) } }
     @objc func delete(_ sender: Any?) { deleteSelected(sender) }
     @objc func duplicate(_ sender: Any?) { if !selElements.isEmpty { edit(["op": "duplicate", "oids": selElements, "dx": 4, "dy": 4]) } }
-    /// Copy: the elements' code on the pasteboard (with the figure they came from), and their picture.
-    @objc func copy(_ sender: Any?) { copySelection(then: nil) }
+    /// Copy: the elements' code on the pasteboard (with the figure they came from); with nothing selected, the
+    /// whole figure as a picture.
+    @objc func copy(_ sender: Any?) { if selElements.isEmpty { copyFigure(sender) } else { copySelection(then: nil) } }
+
+    /// Edit ▸ Copy Figure as Picture: the whole figure (its dark version when that is shown) on the pasteboard as
+    /// vector PDF and as a 600 dpi PNG, for Word, PowerPoint, Keynote, Illustrator, mail and chat.
+    @objc func copyFigure(_ sender: Any?) {
+        guard let name = current else { return }
+        let dark = darkPreview
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("fignimble-copy-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let pdf = dir.appendingPathComponent(name + ".pdf"), png = dir.appendingPathComponent(name + ".png")
+        enqueue { [self] in
+            defer { try? FileManager.default.removeItem(at: dir) }
+            busy("Copying \(name)…")
+            do {
+                for (u, fmt) in [(pdf, "pdf"), (png, "png")] {
+                    _ = try await engine.json("export", ["figure": name, "path": u.path, "format": fmt, "dpi": 600, "dark": dark])
+                }
+                guard let pdfData = try? Data(contentsOf: pdf), let pngData = try? Data(contentsOf: png) else {
+                    toast("Couldn't copy \(name)", error: true); return
+                }
+                let item = NSPasteboardItem()
+                item.setData(pdfData, forType: .pdf)
+                item.setData(pngData, forType: .png)
+                if let tiff = NSBitmapImageRep(data: pngData)?.tiffRepresentation(using: .lzw, factor: 0) { item.setData(tiff, forType: .tiff) }
+                let pb = NSPasteboard.general
+                pb.clearContents()
+                pb.writeObjects([item])
+                toast("Copied \(name)\(dark ? " (dark version)" : "") as a picture")
+            } catch { toast(error.localizedDescription, error: true) }
+        }
+    }
 
     private func copySelection(then: (() -> Void)?) {
         guard let name = current, !selElements.isEmpty else { return }
@@ -890,6 +935,23 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         }
     }
 
+    /// A picture file placed at (x, y), w mm wide (it stays in images/ when it is there already); `lettered` false
+    /// gives it no panel letter.
+    func placePicture(_ path: String, x: Double, y: Double, w: Double, lettered: Bool = true) {
+        guard let name = current else { return }
+        enqueue { [self] in
+            do {
+                var a: [String: Any] = ["figure": name, "path": path, "x": x, "y": y, "w": w, "pxPerMM": lastPx]
+                if !lettered { a["label"] = NSNull() }
+                let r = try await engine.json("import_file", a)
+                if let fig = r["figure"] as? [String: Any] { apply(fig) }
+                if let sel = r["select"] as? [String] { canvas.selection = sel }
+                if r["ok"] as? Bool == false { toast(r["error"] as? String ?? "", error: true) }
+            } catch { toast(error.localizedDescription, error: true) }
+            await refreshState()
+        }
+    }
+
     @objc func exportFigure(_ sender: Any?) {
         guard let name = current else { return }
         let p = NSSavePanel()
@@ -965,7 +1027,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
     @objc func toggleSnapGrid(_ sender: Any?) { canvas.snapToGrid.toggle() }
     @objc func toggleSmartGuides(_ sender: Any?) { canvas.smartGuides.toggle() }
     @objc func toggleSidebar(_ sender: Any?) { navigator.isHidden.toggle() }
-    @objc func toggleInspector(_ sender: Any?) { inspector.isHidden.toggle() }
+    @objc func toggleInspector(_ sender: Any?) { rightHost.isHidden.toggle() }
     @objc func refreshFigure(_ sender: Any?) { refresh(force: true) }
     @objc func showCodePane(_ sender: Any?) {
         if !drawer.isHidden && drawer.page == .code && !middle.isSubviewCollapsed(drawer) { setDrawer(visible: false); return }
@@ -1016,6 +1078,8 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
             if figure.map({ f in selElements.contains { f.element($0)?.group != nil } }) == true { item("Ungroup", #selector(ungroup(_:))) }
             item("Duplicate", #selector(duplicate(_:)))
             item("Delete", #selector(deleteSelected(_:)))
+            let bc = bioCartoonMenuItems()
+            if !bc.isEmpty { m.addItem(.separator()); bc.forEach { m.addItem($0) } }
         } else {
             item("New Panel…", #selector(newPanel(_:))); item("Place Picture…", #selector(insertImage(_:)))
             m.addItem(.separator())
@@ -1048,14 +1112,15 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         case #selector(toggleSnapGrid(_:)): item.state = canvas.snapToGrid ? .on : .off
         case #selector(toggleSmartGuides(_:)): item.state = canvas.smartGuides ? .on : .off
         case #selector(toggleSidebar(_:)): item.title = navigator.isHidden ? "Show Figures and Layers" : "Hide Figures and Layers"
-        case #selector(toggleInspector(_:)): item.title = inspector.isHidden ? "Show Inspector" : "Hide Inspector"
+        case #selector(toggleInspector(_:)): item.title = rightHost.isHidden ? "Show Inspector" : "Hide Inspector"
         case #selector(toggleLabelAlign(_:)): item.state = (figure?.labelStyle["align"] as? Bool ?? true) ? .on : .off; return figure != nil
         case #selector(toggleLabelOrder(_:)): item.state = (figure?.labelStyle["order"] as? String) == "source" ? .on : .off; return figure != nil
         case #selector(labelFormat(_:)):
             let p = Inspector.labelFormats[item.tag]
             item.state = (figure?.labelStyle["format"] as? String == p.1 && figure?.labelStyle["case"] as? String == p.2) ? .on : .off
             return figure != nil
-        case #selector(deleteSelected(_:)), #selector(delete(_:)), #selector(copy(_:)), #selector(editCode(_:)):
+        case #selector(copy(_:)): return figure != nil
+        case #selector(deleteSelected(_:)), #selector(delete(_:)), #selector(editCode(_:)):
             return !sel.isEmpty || item.action == #selector(editCode(_:)) && figure != nil
         case #selector(duplicate(_:)), #selector(bringToFront(_:)), #selector(bringForward(_:)), #selector(sendBackward(_:)), #selector(sendToBack(_:)),
              #selector(alignLeft(_:)), #selector(alignCenter(_:)), #selector(alignRight(_:)), #selector(alignTop(_:)), #selector(alignMiddle(_:)), #selector(alignBottom(_:)),
@@ -1075,7 +1140,8 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         case #selector(addZoom(_:)): return !selElements.isEmpty
         case #selector(selectAll(_:)): return figure != nil
         case #selector(newPanel(_:)), #selector(insertImage(_:)), #selector(insertPanelCode(_:)), #selector(exportFigure(_:)),
-             #selector(labelsOutside(_:)), #selector(labelsInside(_:)), #selector(labelJournal(_:)), #selector(refreshFigure(_:)):
+             #selector(labelsOutside(_:)), #selector(labelsInside(_:)), #selector(labelJournal(_:)), #selector(refreshFigure(_:)),
+             #selector(showBioCartoon(_:)), #selector(copyFigure(_:)):
             return figure != nil
         case #selector(newFigure(_:)), #selector(exportAll(_:)), #selector(revealProject(_:)), #selector(showTerminal(_:)), #selector(newTerminal(_:)):
             return project != nil

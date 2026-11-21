@@ -423,3 +423,38 @@ def test_recolour_panel_marks(session):
     assert r["ok"], r.get("error")
     assert '"#000000", "#edae49"' in (session.project / "panels" / "scatter.py").read_text()
     session.undo({"figure": "fig3"})
+
+
+def test_restyle_panel_text(session):
+    expr = session.project / "panels" / "expression.py"
+    before = expr.read_text()
+    r = session.render("fig1")
+    xl = next(t for t in next(e for e in r["elements"] if e["oid"] == "0")["texts"] if t["key"] == "ax0.xlabel")
+    assert xl["color"] and xl["bold"] is False and xl["italic"] is False
+    # a literal of one ax.set_xlabel(...) in the panel's code: that call gets the settings
+    edit(session, op="panel_text_style", oid="0", key="ax0.xlabel", text="Time (h)",
+         props={"size": 8, "color": "#D55E00", "weight": "bold"})
+    assert 'ax.set_xlabel("Time (h)", fontsize=8, color="#D55E00", fontweight="bold")' in expr.read_text()
+    r = session.render("fig1")
+    xl = next(t for t in next(e for e in r["elements"] if e["oid"] == "0")["texts"] if t["key"] == "ax0.xlabel")
+    assert xl["size"] == 8 and xl["color"] == "#D55E00" and xl["bold"]
+    session.undo({"figure": "fig1"})
+    assert expr.read_text() == before
+    # a text the code doesn't hold as a literal (a legend entry from an f-string): the panel's text_style
+    edit3(session, op="panel_text_style", oid="4", key="ax0.legend0", text="cluster 1",
+          props={"color": "#0072B2", "style": "italic"})
+    assert '"ax0.legend0": {"color": "#0072B2", "style": "italic"}' in fig3_text(session)
+    r = session.render("fig3")
+    lg = next(t for t in next(e for e in r["elements"] if e["oid"] == "4")["texts"] if t["key"] == "ax0.legend0")
+    assert lg["color"] == "#0072B2" and lg["italic"]
+    # a text the panel already retypes (texts=) is restyled beside it
+    edit3(session, op="panel_text_style", oid="4", key="ax0.xlabel", text="tSNE 1", props={"size": 9})
+    assert '"ax0.xlabel": {"size": 9}' in fig3_text(session)
+    # Reset drops both the retyping and the restyling of that text
+    edit3(session, op="panel_text_reset", oid="4", key="ax0.xlabel")
+    t = fig3_text(session)
+    assert '"ax0.xlabel"' not in t and '"ax0.legend0": {"color"' in t
+    session.undo({"figure": "fig3"})
+    session.undo({"figure": "fig3"})
+    session.undo({"figure": "fig3"})
+    assert "text_style" not in fig3_text(session)

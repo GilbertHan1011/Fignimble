@@ -12,6 +12,7 @@ final class RulerView: NSView {
     init(horizontal: Bool) {
         self.horizontal = horizontal
         super.init(frame: .zero)
+        clipsToBounds = true
         toolTip = horizontal ? "Drag down onto the figure to add a horizontal guide" : "Drag right onto the figure to add a vertical guide"
     }
     required init?(coder: NSCoder) { fatalError() }

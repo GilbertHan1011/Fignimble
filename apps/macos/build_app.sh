@@ -24,6 +24,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/bin"
 cp "$ROOT/.build/universal/Fignimble" "$APP/Contents/MacOS/Fignimble"
 rsync -a --exclude __pycache__ "$ROOT/../../engine/" "$APP/Contents/Resources/engine/"
 install -m 755 "$ROOT/../../bin/fignimble" "$APP/Contents/Resources/bin/fignimble"
+cp "$ROOT/assets/biocartoon.png" "$ROOT/assets/biocartoon-mono.png" "$APP/Contents/Resources/"   # BioCartoon's logos (from Manimble)
 cat > "$APP/Contents/Info.plist" <<PL
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

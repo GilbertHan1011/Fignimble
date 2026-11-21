@@ -2,3 +2,4 @@ matplotlib>=3.7
 pymupdf>=1.24
 pillow>=10
 numpy>=1.24
+biocartoon==1.0.0              # Insert ▸ BioCartoon Icons… (the catalog search); optional

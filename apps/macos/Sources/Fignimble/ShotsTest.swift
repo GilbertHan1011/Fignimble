@@ -14,6 +14,7 @@ extension MainController {
             if ProcessInfo.processInfo.environment["FIGNIMBLE_SHOTS_SCENE"] == "features" { await featureShots(dir); return }
             if ProcessInfo.processInfo.environment["FIGNIMBLE_SHOTS_SCENE"] == "code" { await codeShots(dir); return }
             if ProcessInfo.processInfo.environment["FIGNIMBLE_SHOTS_SCENE"] == "colors" { await colorShots(dir); return }
+            if ProcessInfo.processInfo.environment["FIGNIMBLE_SHOTS_SCENE"] == "parts" { await partShots(dir); return }
             shot(dir, "01-figure")
             canvas.selection = ["1"]
             await settle(); shot(dir, "02-panel-selected")
@@ -154,6 +155,67 @@ extension MainController {
     }
 
     /// Wait for the engine work queued so far, then a moment for drawing.
+    /// Texts and marks of a panel picked by clicking, the figure copied as a picture, a scrolled canvas, BioCartoon.
+    private func partShots(_ dir: String) async {
+        // scrolled far down: the figure must stay under the tool bar and the rulers
+        for _ in 0..<12 {
+            if let e = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: -10, wheel2: 0, wheel3: 0).flatMap(NSEvent.init(cgEvent:)) {
+                canvas.scrollWheel(with: e)
+            }
+        }
+        await settle(); shot(dir, "P0-scrolled")
+        canvas.fit(); await settle()
+        // one click on the scatter panel's x-axis label picks the panel and the label
+        guard let sc = figure?.element("1"), let xl = sc.texts.first(where: { $0.key == "ax0.xlabel" }) else { Engine.note("parts: no label"); NSApp.terminate(nil); return }
+        mouse(.leftMouseDown, CGPoint(x: xl.box.midX, y: xl.box.midY)); mouse(.leftMouseUp, CGPoint(x: xl.box.midX, y: xl.box.midY))
+        await settle(); shot(dir, "P1-text-picked")
+        Engine.note("parts: selection \(canvas.selection) part \(String(describing: canvas.part))")
+        edit(["op": "panel_text_style", "oid": "1", "key": "ax0.xlabel", "text": xl.text, "props": ["size": 9, "color": "#D55E00", "weight": "bold"]])
+        await settle(); shot(dir, "P2-text-restyled")
+        Engine.note("parts: after restyle \(figure?.element("1")?.texts.first { $0.key == "ax0.xlabel" }.map { "\($0.size) \($0.color ?? "-") bold \($0.bold)" } ?? "-") part \(String(describing: canvas.part))")
+        undoEdit(nil); await settle()
+        // a bar of the bars panel
+        if let bars = figure?.element("5"), let mk = bars.marks.first(where: { $0.key == "ax0.patch1" }) {
+            canvas.selection = []
+            mouse(.leftMouseDown, CGPoint(x: mk.box.midX, y: mk.box.midY)); mouse(.leftMouseUp, CGPoint(x: mk.box.midX, y: mk.box.midY))
+            await settle(); shot(dir, "P3-mark-picked")
+            Engine.note("parts: mark \(String(describing: canvas.part))")
+        }
+        canvas.part = nil; canvas.selection = []
+        // the whole figure on the pasteboard
+        copyFigure(nil)
+        await settle()
+        let types = NSPasteboard.general.types?.map(\.rawValue) ?? []
+        Engine.note("copy figure: \(types) pdf \(NSPasteboard.general.data(forType: .pdf)?.count ?? 0) png \(NSPasteboard.general.data(forType: .png)?.count ?? 0)")
+        if let d = NSPasteboard.general.data(forType: .png) { try? d.write(to: URL(fileURLWithPath: dir).appendingPathComponent("P4-copied.png")) }
+        // BioCartoon: the search in the inspector's place, an icon dropped on the figure
+        showBioCartoon(nil)
+        for _ in 0..<300 where (biocartoonPane?.resultCount ?? 0) == 0 && biocartoonPane?.offersInstall == nil { try? await Task.sleep(nanoseconds: 100_000_000) }
+        try? await Task.sleep(nanoseconds: 2_000_000_000)
+        shot(dir, "P5-biocartoon")
+        Engine.note("biocartoon: exe \(biocartoonPane?.exe ?? "-") results \(biocartoonPane?.resultCount ?? 0) offers \(biocartoonPane?.offersInstall ?? "-")")
+        var vf = BCFilter(); vf.fileTypes = ["svg"]
+        for (q, filter) in [("mitochondria", BCFilter()), ("neuron", vf)] {
+            guard let exe = biocartoonPane?.exe, let icon = try? await BioCartoonCLI.search(exe, query: q, filter: filter, sort: "relevance", offset: 0, limit: 1).first,
+                  let data = try? JSONEncoder().encode(icon) else { Engine.note("biocartoon: no \(q)"); continue }
+            let n = figure?.elements.count ?? 0
+            _ = biocartoonDropped(data, at: CGPoint(x: q == "neuron" ? 150 : 100, y: 90))
+            for _ in 0..<200 where (figure?.elements.count ?? 0) == n { try? await Task.sleep(nanoseconds: 100_000_000) }
+            await settle()
+            if let e = figure?.elements.last {
+                let src = e.s("source") ?? "-"
+                Engine.note("biocartoon: \(icon.id) svg \(icon.svg_key != nil) -> \(e.kind) \(src) box \(e.box) error \(e.error ?? "none") origin \(BioCartoonCLI.origin(ofImageAt: (project ?? "") + "/" + src)?.id ?? "-")")
+                canvas.selection = [e.oid]
+                Engine.note("biocartoon: menu \(contextMenu().items.map(\.title))")
+            }
+        }
+        canvas.selection = []
+        await settle(); shot(dir, "P6-icons-placed")
+        hideBioCartoon()
+        await settle(); shot(dir, "P7-inspector-back")
+        NSApp.terminate(nil)
+    }
+
     private func settle() async {
         try? await Task.sleep(nanoseconds: 300_000_000)
         await waitForQueue()

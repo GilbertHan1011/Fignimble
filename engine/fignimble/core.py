@@ -533,7 +533,7 @@ class Session:
         """Change arguments of one element: {oid, props}."""
         info = self._info(data, a["oid"])
         props = {k: (REMOVE if (v is None and k in ("label_dx", "label_dy", "group", "name", "crop", "font", "flip",
-                                                    "width", "texts", "colors"))
+                                                    "width", "texts", "colors", "text_style"))
                      or (v is False and k in ("locked", "hidden")) else v)
                  for k, v in a["props"].items()}
         if info["kind"] == "label":
@@ -1142,6 +1142,74 @@ class Session:
         self._set(plan, data, item, {"texts": texts})
         return "Retype in Panel"
 
+    # the calls that draw a text given as their first argument (or `label`/`s`/`t`), whose fontsize, color,
+    # fontweight and fontstyle a restyle can set where the code is
+    _TEXT_CALLS = {"set_xlabel", "set_ylabel", "set_title", "xlabel", "ylabel", "title", "text", "annotate",
+                   "suptitle", "supxlabel", "supylabel", "figtext", "set_label_text"}
+    _TEXT_KW = {"size": "fontsize", "color": "color", "weight": "fontweight", "style": "fontstyle"}
+
+    def _op_panel_text_style(self, plan, data, a):
+        """Restyle a text a panel's code draws: {oid, key, text, props: {size?, color?, weight?, style?}} (None
+        removes one). When the text is a string literal of one ax.set_xlabel(...), ax.text(...) etc. in the panel's
+        code, that call gets fontsize=, color=, fontweight=, fontstyle=; otherwise the panel gets
+        text_style={key: {...}}."""
+        info = self._info(data, a["oid"])
+        if not (info["kind"] == "panel" or (info["kind"] == "inset" and info.get("inner") == "panel")):
+            raise EditError("only the texts of a panel drawn by code can be restyled this way")
+        item = self._picture_call(data, info) if info["kind"] == "inset" else info
+        props, key, upd = item["props"], a["key"], dict(a.get("props") or {})
+        text, src = a.get("text"), props.get("source")
+        styles = dict(props.get("text_style") or {})
+        if text and key not in styles and not (props.get("texts") or {}).get(key) and isinstance(src, str) \
+                and src.endswith(".py") and not src.startswith("<"):
+            path = str((self.project / src).resolve())
+            if Path(path).exists():
+                code = plan.source(path)
+                calls = []
+                for n in ast.walk(code.tree):
+                    if isinstance(n, ast.Call) and isinstance(n.func, (ast.Attribute, ast.Name)) \
+                            and (n.func.attr if isinstance(n.func, ast.Attribute) else n.func.id) in self._TEXT_CALLS:
+                        given = [x for x in n.args[:3]] + [k.value for k in n.keywords if k.arg in ("label", "s", "t")]
+                        if any(isinstance(x, ast.Constant) and x.value == text for x in given):
+                            calls.append(n)
+                if len(calls) == 1:
+                    try:
+                        plan.add(path, srcedit.set_args(code, calls[0], "", {
+                            self._TEXT_KW[k]: (srcedit.REMOVE if v is None else v) for k, v in upd.items()
+                            if k in self._TEXT_KW}, what="this text"))
+                        return "Restyle Text in Panel"
+                    except EditError:
+                        pass                     # a size the code computes: the panel's override wins over it
+        st = dict(styles.get(key) or {})
+        for k, v in upd.items():
+            if k in self._TEXT_KW:
+                if v is None:
+                    st.pop(k, None)
+                else:
+                    st[k] = v
+        if st:
+            styles[key] = st
+        else:
+            styles.pop(key, None)
+        self._set(plan, data, item, {"text_style": styles or srcedit.REMOVE})
+        return "Restyle Text in Panel"
+
+    def _op_panel_text_reset(self, plan, data, a):
+        """Drop the editor's retyping and restyling of one text of a panel: {oid, key}."""
+        info = self._info(data, a["oid"])
+        item = self._picture_call(data, info) if info["kind"] == "inset" else info
+        props, key = item["props"], a["key"]
+        upd = {}
+        for name in ("texts", "text_style"):
+            d = dict(props.get(name) or {})
+            if key in d:
+                d.pop(key)
+                upd[name] = d or srcedit.REMOVE
+        if not upd:
+            raise EditError("this text is as the panel's code draws it")
+        self._set(plan, data, item, upd)
+        return "Reset Text in Panel"
+
     def _op_panel_color(self, plan, data, a):
         """Recolour marks a panel's code draws: {oid, keys, color, old}. When the old colour is written once in the
         panel's code, that is changed (every mark drawn with it follows); otherwise the panel gets colors={key: new}
@@ -1515,7 +1583,7 @@ class Session:
             return {**res, "file": str(path)}
 
     def import_file(self, a: dict) -> dict:
-        """A dropped or chosen file onto the figure: {figure, path, x, y, w?}. Pictures outside the project are
+        """A dropped or chosen file onto the figure: {figure, path, x, y, w?, label?}. Pictures outside the project are
         copied into its images folder; a .py file becomes a panel."""
         src = Path(a["path"]).resolve()
         try:
@@ -1536,8 +1604,11 @@ class Session:
                 props["function"] = fn
             return self.edit({"figure": a["figure"], "op": "insert", "kind": "panel", "props": props,
                               "pxPerMM": a.get("pxPerMM")})
+        props = {"source": str(rel), "x": x, "y": y, "w": float(a.get("w", 60))}
+        if "label" in a:                                 # None: no panel letter (an icon)
+            props["label"] = a["label"]
         return self.edit({"figure": a["figure"], "op": "insert", "kind": "image", "pxPerMM": a.get("pxPerMM"),
-                          "props": {"source": str(rel), "x": x, "y": y, "w": float(a.get("w", 60))}})
+                          "props": props})
 
     def export(self, a: dict) -> dict:
         with self.render_lock:

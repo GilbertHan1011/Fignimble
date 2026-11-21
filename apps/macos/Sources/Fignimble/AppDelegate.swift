@@ -81,6 +81,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                       item("Redo", #selector(MainController.redoEdit(_:)), "z", [.command, .shift]), sep(),
                       item("Cut", #selector(NSText.cut(_:)), "x", to: nil), item("Copy", #selector(NSText.copy(_:)), "c", to: nil),
                       item("Paste", #selector(NSText.paste(_:)), "v", to: nil),
+                      item("Copy Figure as Picture", #selector(MainController.copyFigure(_:)), "c", [.command, .shift]),
                       item("Copy Style", #selector(MainController.copyStyle(_:)), "c", [.command, .option]),
                       item("Paste Style", #selector(MainController.pasteStyle(_:)), "v", [.command, .option]),
                       item("Duplicate", #selector(MainController.duplicate(_:)), "d"),
@@ -89,6 +90,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu("Insert", [item("New Panel from Code…", #selector(MainController.newPanel(_:)), "p", [.command, .shift]),
                         item("Panel from Existing Code…", #selector(MainController.insertPanelCode(_:))),
                         item("Picture…", #selector(MainController.insertImage(_:)), "i", [.command, .shift]),
+                        item("BioCartoon Icons…", #selector(MainController.showBioCartoon(_:)), "b", [.command, .shift]),
                         item("Scale Bar on Picture…", #selector(MainController.addScaleBar(_:))),
                         item("Zoom Box", #selector(MainController.addZoom(_:))), sep()]
              + Tool.allCases.dropFirst().map { t in

@@ -19,7 +19,16 @@ enum Tool: String, CaseIterable {
 final class CanvasView: NSView, NSTextFieldDelegate {
     weak var main: MainController?
     private(set) var figure: FigureData?
-    var selection: [String] = [] { didSet { if selection != oldValue { needsDisplay = true; main?.selectionChanged() } } }
+    var selection: [String] = [] {
+        didSet {
+            guard selection != oldValue else { return }
+            if let pt = part, selection != [pt.oid] { part = nil }
+            needsDisplay = true; main?.selectionChanged()
+        }
+    }
+    /// A text or mark of the selected panel, picked by clicking it, which the inspector changes.
+    var part: PanelPart? { didSet { if part != oldValue { needsDisplay = true; main?.selectionChanged() } } }
+    private var hoverPart: PanelPart?
     var tool: Tool = .select { didSet { window?.invalidateCursorRects(for: self); main?.toolChanged() } }
     var showGrid = UserDefaults.standard.bool(forKey: "showGrid") { didSet { UserDefaults.standard.set(showGrid, forKey: "showGrid"); needsDisplay = true } }
     var snapToGrid = UserDefaults.standard.bool(forKey: "snapToGrid") { didSet { UserDefaults.standard.set(snapToGrid, forKey: "snapToGrid") } }
@@ -80,7 +89,9 @@ final class CanvasView: NSView, NSTextFieldDelegate {
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
-        registerForDraggedTypes([.fileURL])
+        // since macOS 14 a view may draw outside its bounds: a figure scrolled up would cover the tool bar and rulers
+        clipsToBounds = true
+        registerForDraggedTypes([.fileURL, BioCartoonPane.dragType])
         let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect, .cursorUpdate],
                                   owner: self, userInfo: nil)
         addTrackingArea(area)
@@ -98,6 +109,7 @@ final class CanvasView: NSView, NSTextFieldDelegate {
         pending = nil
         // keep the selection where its elements still exist
         if let f = f { selection = selection.filter { f.element($0) != nil } } else { selection = [] }
+        if let pt = part, partText(pt) == nil && partMark(pt) == nil { part = nil }
         // drop pictures no longer used
         let used = Set(f?.all.compactMap { $0.sprite?.file } ?? [])
         images = images.filter { used.contains($0.key) }
@@ -297,12 +309,22 @@ final class CanvasView: NSView, NSTextFieldDelegate {
             Theme.warm.setFill(); NSBezierPath(roundedRect: r, xRadius: 4, yRadius: 4).fill()
             s.draw(at: CGPoint(x: r.minX + 6, y: r.minY + 2))
         }
-        // texts a selected panel draws, which double-click retypes
+        // texts a selected panel draws, which a click picks and double-click retypes
         if selection.count == 1, let e = f.element(selection[0]), !e.texts.isEmpty, case .none = drag {
             Theme.accent.withAlphaComponent(0.35).setStroke()
-            for t in e.texts {
+            for t in e.texts where t.key != part?.key {
                 let p = NSBezierPath(rect: toView(t.box).insetBy(dx: -1, dy: -1)); p.lineWidth = 0.75
                 p.setLineDash([1.5, 2], count: 2, phase: 0); p.stroke()
+            }
+        }
+        // the text or mark under the pointer, and the one picked
+        if case .none = drag {
+            for (pt, picked) in [(hoverPart, false), (part, true)] {
+                guard let pt, picked || pt != part, let r = partBox(pt) else { continue }
+                let v = toView(r).insetBy(dx: -1.5, dy: -1.5)
+                if picked { Theme.accent.withAlphaComponent(0.1).setFill(); v.fill() }
+                Theme.accent.withAlphaComponent(picked ? 1 : 0.6).setStroke()
+                let p = NSBezierPath(rect: v); p.lineWidth = picked ? 1.5 : 1; p.stroke()
             }
         }
         // a path's points, to drag
@@ -661,6 +683,8 @@ final class CanvasView: NSView, NSTextFieldDelegate {
             } else if !selection.contains(el.oid) {
                 selection = ids
             }
+            // a text or mark of a panel is picked by the same click (the panel is still what a drag moves)
+            part = e.modifierFlags.contains(.shift) || selection != [el.oid] ? nil : partHit(el, p, marks: true)
             let oids = selection
             // dragging a label moves every label (they share one offset); ⌥ moves this one only
             let allLabels = el.isLabel && !e.modifierFlags.contains(.option)
@@ -789,15 +813,38 @@ final class CanvasView: NSView, NSTextFieldDelegate {
     override func mouseMoved(with e: NSEvent) {
         let p = toMM(convert(e.locationInWindow, from: nil))
         if tool == .pen, !penPoints.isEmpty { current = snapPoint(p); needsDisplay = true }
-        let h = tool == .select ? hit(p)?.oid : nil
+        let hel = tool == .select ? hit(p) : nil
+        let h = hel?.oid
         if h != hover { hover = h; needsDisplay = true }
+        // texts of any panel; marks only of the selected one (a line's box can cover the whole plot)
+        let hp = hel.flatMap { partHit($0, p, marks: selection == [$0.oid]) }
+        if hp != hoverPart { hoverPart = hp; needsDisplay = true }
         if tool == .select, let (l, k) = hitDivider(convert(e.locationInWindow, from: nil)) {
             (l.dividers[k].vertical ? NSCursor.resizeLeftRight : NSCursor.resizeUpDown).set()
         } else if tool == .select { NSCursor.arrow.set() }
         onCursor?(p)
         main?.hint(for: h.flatMap { figure?.element($0) })
     }
-    override func mouseExited(with e: NSEvent) { hover = nil; needsDisplay = true; onCursor?(nil) }
+    override func mouseExited(with e: NSEvent) { hover = nil; hoverPart = nil; needsDisplay = true; onCursor?(nil) }
+
+    /// The text (or, with `marks`, the smallest mark) of a panel under the point.
+    func partHit(_ el: Element, _ p: CGPoint, marks: Bool) -> PanelPart? {
+        if let t = el.texts.first(where: { $0.box.insetBy(dx: -0.4, dy: -0.4).contains(p) }) {
+            return PanelPart(oid: el.oid, key: t.key, isText: true)
+        }
+        guard marks, let mk = el.marks.filter({ $0.box.insetBy(dx: -0.5, dy: -0.5).contains(p) })
+            .min(by: { $0.box.width * $0.box.height < $1.box.width * $1.box.height }) else { return nil }
+        return PanelPart(oid: el.oid, key: mk.key, isText: false)
+    }
+    func partText(_ pt: PanelPart) -> PanelText? { pt.isText ? figure?.element(pt.oid)?.texts.first { $0.key == pt.key } : nil }
+    func partMark(_ pt: PanelPart) -> PanelMark? { pt.isText ? nil : figure?.element(pt.oid)?.marks.first { $0.key == pt.key } }
+    private func partBox(_ pt: PanelPart) -> CGRect? { partText(pt)?.box ?? partMark(pt)?.box }
+
+    /// Retype the picked text in place.
+    func editPartText() {
+        guard let pt = part, let t = partText(pt) else { return }
+        beginEditor(oid: pt.oid, at: t.box.origin, size: t.size, text: t.text, key: t.key)
+    }
 
     override func cursorUpdate(with e: NSEvent) {
         if tool != .select { NSCursor.crosshair.set() } else { NSCursor.arrow.set() }
@@ -1066,14 +1113,21 @@ final class CanvasView: NSView, NSTextFieldDelegate {
         case 124: main?.nudge(dx: step, dy: 0)
         case 125: main?.nudge(dx: 0, dy: step)
         case 126: main?.nudge(dx: 0, dy: -step)
-        case 51, 117: main?.deleteSelected(nil)
+        case 51, 117:
+            // with a text of a panel picked, Delete empties that text rather than delete the panel
+            if let pt = part {
+                if let t = partText(pt) { main?.edit(["op": "panel_text", "oid": pt.oid, "key": pt.key, "text": "", "old": t.text]) }
+                else { main?.toast("Press Esc, then Delete, to delete the panel") }
+            } else { main?.deleteSelected(nil) }
         case 53:
-            if tool == .pen && !penPoints.isEmpty { penPoints = []; needsDisplay = true }
+            if part != nil { part = nil }
+            else if tool == .pen && !penPoints.isEmpty { penPoints = []; needsDisplay = true }
             else if cropping != nil { endCrop() }
             else if tool != .select { tool = .select } else { selection = [] }
         case 36:
             if tool == .pen { finishPen(closed: false) }
             else if cropping != nil { endCrop() }
+            else if let pt = part, pt.isText { editPartText() }
             else if let oid = selection.first, let el = figure?.element(oid) { doubleClick(el) }
         default: super.keyDown(with: e)
         }
@@ -1195,6 +1249,9 @@ final class CanvasView: NSView, NSTextFieldDelegate {
 
     override func draggingEntered(_ s: NSDraggingInfo) -> NSDragOperation { figure == nil ? [] : .copy }
     override func performDragOperation(_ s: NSDraggingInfo) -> Bool {
+        if let d = s.draggingPasteboard.data(forType: BioCartoonPane.dragType) {
+            return main?.biocartoonDropped(d, at: toMM(convert(s.draggingLocation, from: nil))) ?? false
+        }
         guard let urls = s.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
               !urls.isEmpty else { return false }
         let p = toMM(convert(s.draggingLocation, from: nil))
