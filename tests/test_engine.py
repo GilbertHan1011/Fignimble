@@ -458,3 +458,97 @@ def test_restyle_panel_text(session):
     session.undo({"figure": "fig3"})
     session.undo({"figure": "fig3"})
     assert "text_style" not in fig3_text(session)
+
+
+def test_export_meets_journal_resolution(session, tmp_path):
+    from PIL import Image
+    # a raster export below what the journal asks is raised to it, and says so
+    r = session.export({"figure": "fig1", "path": str(tmp_path / "f.tiff"), "dpi": 300, "journal": "cell"})
+    rz = r["resolution"]
+    assert rz["kind"] == "combination" and rz["dpi"] == 500 and rz["ok"] and "raised" in rz["notes"][0]
+    with Image.open(tmp_path / "f.tiff") as im:
+        assert round(im.info["dpi"][0]) == 500 and im.mode == "RGB"
+        assert abs(im.size[0] / (183 / 25.4) - 500) < 1
+    # a figure with no pictures is line art
+    r = session.export({"figure": "fig1", "path": str(tmp_path / "f.jpg"), "dpi": 600})
+    assert r["resolution"]["dpi"] == 600
+    # PDF: the pictures inside are measured, and one printed too large for its pixels is reported
+    r = session.export({"figure": "fig1", "path": str(tmp_path / "f.pdf")})
+    assert r["resolution"]["ok"] and r["resolution"]["pictures"] >= 300
+    r = session.export({"figure": "fig3", "path": str(tmp_path / "f3.pdf")})
+    assert not r["resolution"]["ok"] and any("dpi as printed" in w for w in r["warnings"])
+    if shutil.which("gs") or Path("/usr/local/bin/gs").exists() or Path("/opt/homebrew/bin/gs").exists():
+        r = session.export({"figure": "fig1", "path": str(tmp_path / "f.eps")})
+        assert r["resolution"]["ok"] and r["resolution"]["pictures"] >= 1200 * 0.98
+
+
+def test_tables(session, tmp_path):
+    import zipfile
+    from fignimble import tables
+    csv = tmp_path / "genes.csv"
+    csv.write_text("Gene,Cells,Fold change,p\nCD3E,1204,2.4512,0.0012\nLYZ,2950,1.10,0.048\n")
+    # a dropped CSV is copied into tables/ and becomes a table
+    r = session.import_file({"figure": "fig1", "path": str(csv), "x": 100, "y": 90})
+    assert r["ok"], r.get("error")
+    assert 'fig.table("tables/genes.csv", x=100, y=90)' in fig_text(session)
+    t = next(e for e in r["figure"]["elements"] if e["kind"] == "table")
+    assert t["box"][2] > 20 and t["box"][3] > 5 and "sprite" in t
+    edit(session, op="set", oid=t["oid"], props={"decimals": [None, None, 2, 3]})
+    assert "decimals=[None, None, 2, 3]" in fig_text(session)
+    edit(session, op="resize", oid=t["oid"], box=[100, 90, 70, 10])
+    r = session.render("fig1")
+    assert abs(next(e for e in r["elements"] if e["oid"] == t["oid"])["box"][2] - 70) < 0.01
+    shown, align = tables.cells(tables.read_rows(csv), True, [None, None, 2, 3])
+    assert shown[1] == ["CD3E", "1204", "2.45", "0.001"] and align == ["l", "r", "r", "r"]
+    # as a Word file: a real table in the figure's font, header bold, numbers right
+    out = session.export_table({"figure": "fig1", "oid": t["oid"], "path": str(tmp_path / "t.docx")})
+    assert out["ok"], out.get("error")
+    x = zipfile.ZipFile(out["path"]).read("word/document.xml").decode()
+    assert x.count("<w:tr>") == 3 and x.count("<w:tc>") == 12 and "<w:tblGrid>" in x
+    assert "2.45" in x and "0.001" in x and 'w:ascii="Arial"' in x and "<w:b/>" in x and 'w:val="right"' in x
+    assert session.export_table({"figure": "fig1", "oid": "0", "path": str(tmp_path / "x.docx")})["ok"] is False
+    for _ in range(3):
+        session.undo({"figure": "fig1"})
+
+
+def test_no_panel_letters(session):
+    edit(session, op="labels", props={"numbering": "none"})
+    r = session.render("fig1")
+    assert r["labels"] == []
+    session.undo({"figure": "fig1"})
+    assert len(session.render("fig1")["labels"]) == 6
+
+
+def test_panel_from_ssh_server(session, tmp_path, monkeypatch):
+    # a stand-in for ssh: runs the remote command in a shell here, with a home folder of its own
+    home = tmp_path / "server home"
+    (home / "analysis" / "old stuff").mkdir(parents=True)
+    (home / "analysis" / "umap panel.py").write_text("def draw(fig):\n    ax = fig.add_subplot()\n    ax.plot([0, 1], [1, 0])\n")
+    (home / "analysis" / "data.csv").write_text("x\n1\n")
+    fake = tmp_path / "fake_ssh"
+    fake.write_text(f'#!/bin/bash\nwhile [ "$1" != "--" ]; do shift; done; shift\nexport HOME="{home}"\ncd "$HOME"\n'
+                    'exec /bin/bash -c "$*"\n')
+    fake.chmod(0o755)
+    monkeypatch.setenv("FIGNIMBLE_SSH", str(fake))
+    r = session.remote_list({"host": "lab-server"})
+    assert r["ok"], r.get("error")
+    assert r["path"] == str(home) and {"name": "analysis", "dir": True} in r["entries"]
+    r = session.remote_list({"host": "lab-server", "path": "~/analysis"})
+    assert [e["name"] for e in r["entries"]] == ["old stuff", "umap panel.py"]       # folders, then .py files
+    r = session.import_remote({"figure": "fig1", "host": "lab-server", "path": "~/analysis/umap panel.py", "x": 10, "y": 70})
+    assert r["ok"], r.get("error")
+    text = Path(r["file"]).read_text()
+    assert text.startswith("# Fetched from lab-server:~/analysis/umap panel.py by Fignimble")
+    assert 'fig.panel("panels/umap panel.py", x=10, y=70' in fig_text(session)
+    assert not any(e.get("error") for e in r["figure"]["elements"])
+    # changed on the server: Update from Server takes the new code (one undo step)
+    (home / "analysis" / "umap panel.py").write_text("def draw(fig):\n    fig.add_subplot().bar([0, 1], [2, 3])\n")
+    r = session.update_remote({"file": "panels/umap panel.py", "figure": "fig1"})
+    assert r["ok"], r.get("error")
+    assert "bar(" in Path(session.project / "panels" / "umap panel.py").read_text()
+    session.undo({"figure": "fig1"})
+    assert "plot(" in Path(session.project / "panels" / "umap panel.py").read_text()
+    bad = session.import_remote({"figure": "fig1", "host": "lab-server", "path": "~/analysis/missing.py", "x": 0, "y": 0})
+    assert not bad["ok"] and "couldn't fetch" in bad["error"]
+    assert not session.remote_list({"host": "-oProxyCommand=x"})["ok"]
+    session.undo({"figure": "fig1"})

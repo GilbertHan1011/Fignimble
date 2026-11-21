@@ -4,7 +4,10 @@
     fignimble snapshot fig1.py [--dpi 150]         render to .fignimble/snapshots/fig1.png and print the path
     fignimble info fig1.py [--json]                elements, boxes (mm), labels and preflight warnings
     fignimble check [fig1.py ...]                  preflight warnings of every figure; exit status 1 if any
-    fignimble export fig1.py fig1.pdf [--dpi 600]  PDF, SVG, EPS, PNG, TIFF or JPEG (--cmyk, --outline for print)
+    fignimble table fig1.py 0 table1.docx          a table of a figure (its element number or name) as a Word
+                                                   file; or fignimble table data.csv table1.docx
+    fignimble export fig1.py fig1.pdf [--dpi 600]  PDF, SVG, EPS, PNG, TIFF or JPEG (--cmyk, --outline for print;
+                                                   --journal cell: its resolutions, else the style's journal's)
     (snapshot and export take --dark: the figure's dark version, for talks)
     fignimble journals                             the journal presets and their column widths
 """
@@ -56,6 +59,13 @@ def main(argv=None):
     p.add_argument("--dark", action="store_true", help="the figure's dark version")
     p.add_argument("--cmyk", action="store_true", help="CMYK colours for print (PDF, EPS, TIFF, JPEG)")
     p.add_argument("--outline", action="store_true", help="text as shapes (PDF, EPS, SVG)")
+    p.add_argument("--journal", help="resolution rules of nature, science, cell, pnas, elife (default: the style's)")
+    p = sub.add_parser("table", help="write a table as a Word file (.docx)")
+    p.add_argument("source", help="a figure file (then the table's element number or name) or a .csv/.tsv file")
+    p.add_argument("args", nargs="+", help="[element] output.docx")
+    p.add_argument("--decimals", type=int)
+    p.add_argument("--no-header", action="store_true")
+    p.add_argument("--title")
     sub.add_parser("journals", help="list journal presets")
     a = ap.parse_args(argv)
 
@@ -69,8 +79,10 @@ def main(argv=None):
         for k, j in JOURNALS.items():
             ws = ", ".join(f"{n} {w} mm" for n, w in j["widths"].items())
             lab = j["labels"]
+            d = j["dpi"]
             print(f"{k:8} {j['name']:12} {ws}; {j['font']} {j['font_size']} pt (min {j['min_font']}); labels "
-                  f"{lab['weight']} {lab['case']}case {lab['size']} pt")
+                  f"{lab['weight']} {lab['case']}case {lab['size']} pt; {d['photo']}/{d['combination']}/{d['line']} dpi "
+                  "(photo/combination/line art)")
         return 0
     if a.cmd == "snapshot":
         fig = Path(a.figure)
@@ -84,10 +96,46 @@ def main(argv=None):
     if a.cmd == "export":
         fig = Path(a.figure)
         res = _renderer(fig).export(str(fig.resolve()), str(Path(a.output).resolve()), dpi=a.dpi, dark=a.dark,
-                                    cmyk=a.cmyk, outline=a.outline)
+                                    cmyk=a.cmyk, outline=a.outline, journal=a.journal)
         print(f"wrote {res['path']}")
+        rz = res["resolution"]
+        for n in rz.get("notes", []):
+            print("note:", n)
+        if rz.get("dpi"):
+            print(f"resolution: {rz['dpi']} dpi ({rz['kind']} figure; {rz['need'][rz['kind']]} dpi asked)")
+        elif rz.get("pictures"):
+            print(f"resolution: vector, pictures at {rz['pictures']} dpi or more ({rz['need']['photo']} dpi asked)")
         for w in res["warnings"]:
             print("warning:", w, file=sys.stderr)
+        return 0
+    if a.cmd == "table":
+        from . import tables
+        src = Path(a.source)
+        out = a.args[-1]
+        if src.suffix.lower() == ".py":
+            if len(a.args) != 2:
+                print("give the table's element number (as fignimble info shows it) or name, then the .docx")
+                return 2
+            res = _renderer(src).render(str(src.resolve()), sprites=False)
+            if res.get("error"):
+                print(res["error"])
+                return 1
+            want = a.args[0].lstrip("#")
+            e = next((e for e in res["elements"] if e["kind"] == "table" and want in (e["oid"], e["props"].get("name"))),
+                     None)
+            if e is None:
+                print(f"{src.name} has no table {a.args[0]}")
+                return 1
+            p = e["props"]
+            rows = p["rows"] if p.get("rows") is not None else tables.read_rows(src.parent / p["source"])
+            st = res["style"]["props"]
+            path = tables.write_docx(rows, out, header=p.get("header", True), decimals=p.get("decimals"),
+                                     align=p.get("align"), font=p.get("font") or st.get("font") or "Arial",
+                                     size=p.get("size") or st.get("size") or 7, title=a.title)
+        else:
+            path = tables.write_docx(tables.read_rows(src), out, header=not a.no_header, decimals=a.decimals,
+                                     title=a.title)
+        print(f"wrote {path}")
         return 0
     if a.cmd == "info":
         fig = Path(a.figure)

@@ -168,6 +168,7 @@ final class Element {
         case "path": return (props["closed"] as? Bool ?? false) ? "Shape" : "Path"
         case "zoom": return "Zoom box"
         case "scalebar": return "Scale bar \(mm(p("length") ?? 0)) \(s("unit") ?? "")"
+        case "table": return "Table " + ((s("source") ?? "") as NSString).lastPathComponent
         default: return kind
         }
     }
@@ -182,6 +183,7 @@ final class Element {
         case "bracket": return "chevron.up"
         case "layout": return "rectangle.split.2x2"
         case "legend": return "list.bullet.rectangle"
+        case "table": return "tablecells"
         case "inset": return "rectangle.inset.filled"
         case "path": return "scribble"
         case "zoom": return "plus.magnifyingglass"

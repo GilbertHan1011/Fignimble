@@ -139,7 +139,11 @@ panel code rather than repeating hex codes, and keep colour-blind readers in min
 they can't tell apart). A panel's `texts={"ax0.xlabel": "..."}`, `text_style={"ax0.legend0": {"size": 8, "color": "#...", "weight": "bold"}}`
 and `colors={"ax0.line1": "#..."}` hold texts, text settings and colours the user changed on the canvas: leave them alone, or move them into the panel's code and remove the entries. `locked=True` / `hidden=True` are the user's layer settings: keep them.
 
-Other options: `label=None` (no letter) or `label="a'"` on a panel; `fit=`/`crop=` on images; `group="g1"` to keep
+Tables: `fig.table("tables/counts.csv", x=4, y=80, decimals=2)` (CSV/TSV in `tables/`, or `rows=[[...], ...]`); keep
+the numbers in the data file, not in the figure. Journals want tables as text: `fignimble table fig1.py 3 table1.docx`
+writes one as a Word table.
+
+Other options: `label=None` (no letter) or `label="a'"` on a panel; `Labels(numbering="none")` for no letters at all; `fit=`/`crop=` on images; `group="g1"` to keep
 elements together; `fig.guide(x=91.5)` for an editor guide line. Run `python -c "import fignimble; help(fignimble.Figure)"`
 for every argument.
 
@@ -148,7 +152,8 @@ for every argument.
 - `fignimble snapshot fig1.py` renders the figure to a PNG and prints its path. Open that picture to check your work.
 - `fignimble info fig1.py` lists every element with its box (mm), the panel labels, and the preflight warnings (text
   below the journal's minimum size, low-resolution pictures, elements outside the figure).
-- `fignimble export fig1.py fig1.pdf` writes the figure (PDF, SVG, PNG, TIFF; `--dark` for its dark version). Don't run
+- `fignimble export fig1.py fig1.pdf` writes the figure (PDF, EPS, SVG, TIFF, PNG, JPEG; `--dark` for its dark version,
+  `--journal cell` for that journal's resolutions; TIFF/JPEG are raised to them and every export is measured). Don't run
   other renderers.
 
 ## Keep the figures editable by hand

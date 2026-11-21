@@ -19,11 +19,16 @@ Coordinates are millimetres from the figure's top-left corner, y down.
 | `edit` | `figure`, `op`, op arguments, `pxPerMM?` | `{ok, error?, figure, select?}`: the render after the edit, and the new elements to select |
 | `write_source` | `file`, `text`, `figure?` | `{ok, figure?}`; one undo step |
 | `undo`, `redo` | `figure?` | `{ok, label, figure}` or `{ok: false, error}` |
-| `export` | `figure`, `path`, `format?` (pdf, svg, png, tiff, jpg), `dpi?` | `{ok, path, warnings}`; the app's Copy Figure exports a PDF and a PNG this way for the pasteboard |
+| `export` | `figure`, `path`, `format?` (pdf, eps, svg, png, tiff, jpg), `dpi?`, `journal?`, `cmyk?`, `outline?`, `dark?` | `{ok, path, warnings, resolution: {journal, kind, need, dpi?, pictures?, ok, notes}}`; the app's Copy Figure exports a PDF and a PNG this way for the pasteboard |
 | `new_figure` | `name`, `width`, `height` | `{ok, name}` |
 | `new_panel` | `figure`, `name`, `x, y, w, h` | as `edit`, plus `file` (the new panel file) |
 | `import_file` | `figure`, `path`, `x`, `y`, `w?`, `label?` | as `edit`; pictures are copied into `images/`, `.py` files become panels; `label: null` gives no letter |
-| `journals` | | the journal presets |
+| `journals` | | the journal presets (sizes, fonts, labels, `dpi: {photo, combination, line}`) |
+| `export_table` | `figure`, `oid`, `path`, `title?` | `{ok, path}`: a table element as a Word file |
+| `remote_hosts` | | `{hosts}` from `~/.ssh/config` |
+| `remote_list` | `host`, `path?` | `{ok, host, path, entries: [{name, dir}]}`: folders and .py files there |
+| `import_remote` | `figure`, `host`, `path`, `x`, `y` | as `import_file`, plus `file`: the panel code copied into `panels/` |
+| `update_remote` | `file`, `figure?` | as `write_source`: the panel code fetched again from where its first line says |
 
 ## Edit operations
 

@@ -138,7 +138,7 @@ The app itself follows the system's light or dark appearance, or **View ▸ Appe
 ## What Fignimble does that Illustrator doesn't
 
 - **Panel labels are automatic and consistent.** Panels are lettered in reading order (a, b, c… or A, B, C…,
-  `(a)`, `a.`, roman or arabic numbering) and re-lettered when panels move. One `Labels(...)` in `style.py` sets font,
+  `(a)`, `a.`, roman or arabic numbering, or none: Labels ▸ No Letters, `Labels(numbering="none")`) and re-lettered when panels move. One `Labels(...)` in `style.py` sets font,
   size, weight and offset for every panel of every figure, and labels in a row or column line up. Dragging a label
   moves *all* labels (they share one offset); ⌥-drag nudges one. A panel can have its own label (`label="a'"`) or none.
 - **Panels redraw at their size.** Resizing a panel re-runs its code at the new size, so its fonts and line widths
@@ -148,8 +148,21 @@ The app itself follows the system's light or dark appearance, or **View ▸ Appe
 - **Preflight.** Every render checks what a production office would: text below the minimum size (inside panels too),
   pictures below 300 dpi at their printed size, Type 3 fonts, elements outside the figure, duplicate labels, and
   whether the width matches the journal's columns (Nature, Science, Cell, PNAS, eLife).
-- **Exports that journals take**: vector PDF and SVG with real, editable TrueType text; PNG, TIFF (LZW) and JPEG at
-  300/600/1200 dpi.
+- **Exports that meet journals' resolution rules**: vector PDF, EPS and SVG with real, editable TrueType text; TIFF
+  (LZW), JPEG and PNG at 300 to 1200 dpi. Export (⌘E) asks which journal (the style's by default): a TIFF or JPEG
+  below what it asks is raised to it, 1200 dpi for line art, 600 with pictures (Cell Press 1000/500), an EPS has what
+  Ghostscript rasterizes drawn at the line-art dpi, and the file written is measured: its dpi, or every picture inside
+  a PDF or EPS against the 300 dpi asked for photographs. `fignimble export fig1.py fig1.tiff --journal cell`.
+- **Tables as Word files**: `fig.table("tables/genes.csv", x=4, y=80, decimals=[None, 0, 2, 3])` draws a table from a
+  CSV or TSV (Insert ▸ Table from CSV…, or drop the file on the figure), in the figure's font with rules above and
+  below the header and at the bottom; numbers go right. Journals want tables as text, so **File ▸ Export Table as
+  Word…** (and `fignimble table fig1.py 3 table1.docx`, or `fignimble table data.csv table1.docx`) writes it as a
+  real, editable Word table.
+- **Panels from an SSH server**: Insert ▸ Panel from SSH Server… lists a folder on a server (hosts from
+  `~/.ssh/config`) and copies the panel code you pick into `panels/`, its first line saying where it came from;
+  right-click the panel ▸ **Update from Server** fetches it again (one undo step). It connects with your SSH key (or an
+  agent, or a connection opened in the terminal with ControlMaster); it can't ask for a password. Data the panel
+  reads on the server has to be copied too.
 
 ## The editor
 
@@ -180,7 +193,8 @@ look at its own work:
 fignimble snapshot fig1.py      # render to .fignimble/snapshots/fig1.png and print the path (an agent can read the picture)
 fignimble info fig1.py          # every element's box in mm, the labels, preflight warnings
 fignimble check                 # preflight every figure; exit status 1 on problems
-fignimble export fig1.py fig1.pdf --dpi 600
+fignimble export fig1.py fig1.pdf --dpi 600   # --journal cell: its resolutions (default: the style's journal)
+fignimble table fig1.py 3 table1.docx          # a table of the figure as a Word file
 fignimble new myfigures --journal cell
 fignimble journals
 ```

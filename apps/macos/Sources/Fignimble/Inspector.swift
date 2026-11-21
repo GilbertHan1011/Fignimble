@@ -249,8 +249,8 @@ final class Inspector: NSView {
         let cur = Inspector.labelFormats.first { $0.1 == fmt && $0.2 == cs }?.0
         row([("Style", popup(Inspector.labelFormats.map(\.0), cur, width: 70) { i, _ in
                 let p = Inspector.labelFormats[i]; m.edit(["op": "labels", "props": ["format": p.1, "case": p.2]]) }),
-             ("", popup(["a b c", "i ii iii", "1 2 3"], ["alpha": "a b c", "roman": "i ii iii", "arabic": "1 2 3"][ls["numbering"] as? String ?? "alpha"], width: 82) { i, _ in
-                m.edit(["op": "labels", "props": ["numbering": ["alpha", "roman", "arabic"][i]]]) })])
+             ("", popup(["a b c", "i ii iii", "1 2 3", "none"], ["alpha": "a b c", "roman": "i ii iii", "arabic": "1 2 3", "none": "none"][ls["numbering"] as? String ?? "alpha"], width: 82) { i, _ in
+                m.edit(["op": "labels", "props": ["numbering": ["alpha", "roman", "arabic", "none"][i]]]) })])
         row([("Size", numberField(num(ls["size"]), width: 40) { m.edit(["op": "labels", "props": ["size": $0]]) }), ("pt", NSView()),
              ("", check("Bold", (ls["weight"] as? String) == "bold") { m.edit(["op": "labels", "props": ["weight": $0 ? "bold" : "normal"]]) }),
              ("", check("Italic", (ls["style"] as? String) == "italic") { m.edit(["op": "labels", "props": ["style": $0 ? "italic" : "normal"]]) })])
@@ -282,6 +282,9 @@ final class Inspector: NSView {
             row([("Y", numberField(e.p("y"), width: 48, set("y"))), ("Tick", numberField(e.p("tick"), width: 40, set("tick"))), ("mm", NSView())])
         case "text":
             row([("X", numberField(e.p("x"), set("x"))), ("Y", numberField(e.p("y"), set("y"))), ("mm", NSView())])
+        case "table":
+            row([("X", numberField(e.p("x"), set("x"))), ("Y", numberField(e.p("y"), set("y"))), ("mm", NSView())])
+            row([("W", numberField(Double(e.box.width), set("w"))), ("mm (never narrower than its text)", NSView())])
         case "path", "zoom", "scalebar", "legend":
             let b = e.box
             note("At \(mm(Double(b.minX))), \(mm(Double(b.minY))) mm, \(mm(Double(b.width))) × \(mm(Double(b.height))) mm.")
@@ -445,6 +448,27 @@ final class Inspector: NSView {
             strokeRows(e, setp, fill: true)
             if e.kind == "rect" { row([("Corner radius", numberField(e.p("radius") ?? 0, width: 40) { setp(["radius": $0]) }), ("mm", NSView())]) }
             row([("Opacity", numberField((e.p("opacity") ?? 1) * 100, width: 40) { setp(["opacity": max(0, min(1, $0 / 100))]) }), ("%", NSView())])
+        case "table":
+            section("Table")
+            if let src = e.s("source") { note(src + "  ·  edit the file and the table follows") } else { note("rows written in the figure's code") }
+            row([("", check("First row is a header", e.props["header"] as? Bool ?? true) { setp(["header": $0]) })])
+            row([("Size", numberField(e.p("size") ?? num(f.style["size"]), width: 40) { setp(["size": $0]) }), ("pt", NSView()),
+                 ("", color(e.s("color")) { setp(["color": $0]) })])
+            let dec: String = {
+                if let d = e.props["decimals"] as? NSNumber { return d.stringValue }
+                if let l = e.props["decimals"] as? [Any] { return l.map { ($0 as? NSNumber)?.stringValue ?? "-" }.joined(separator: " ") }
+                return ""
+            }()
+            row([("Decimals", Field(dec, width: 80) { t in
+                let parts = t.split(whereSeparator: { $0 == " " || $0 == "," }).map(String.init)
+                if parts.isEmpty { setp(["decimals": NSNull()]) }
+                else if parts.count == 1, let d = Int(parts[0]) { setp(["decimals": d]) }
+                else { setp(["decimals": parts.map { Int($0).map { $0 as Any } ?? NSNull() }]) }
+            }), ("(2, or one per column: - 0 2 3)", NSView())])
+            row([("Align", Field(e.s("align") ?? "", width: 60) { setp(["align": $0.isEmpty ? (NSNull() as Any) : $0]) }),
+                 ("(lcr per column; empty: numbers right)", NSView())])
+            row([("", button("Export as Word…", symbol: "doc.richtext") { m.exportTable(nil) })])
+            note("Journals want tables as text: Export as Word writes a real Word table, in the figure's font.")
         case "bracket":
             section("Bracket")
             row([("Text", Field(e.s("text") ?? "", width: 90) { setp(["text": $0]) }), ("", color(e.s("color")) { setp(["color": $0]) })])

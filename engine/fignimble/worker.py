@@ -36,7 +36,7 @@ def main():
                 elif cmd == "export":
                     res = r.export(req["file"], req["path"], req.get("format"), dpi=int(req.get("dpi", 600)),
                                    dark=bool(req.get("dark")), cmyk=bool(req.get("cmyk")),
-                                   outline=bool(req.get("outline")))
+                                   outline=bool(req.get("outline")), journal=req.get("journal"))
                 else:
                     raise ValueError(f"unknown worker command {cmd}")
             out.write(json.dumps({"id": req.get("id"), "result": res}) + "\n")

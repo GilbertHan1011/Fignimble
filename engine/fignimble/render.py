@@ -35,7 +35,8 @@ import pymupdf  # noqa: E402
 from matplotlib.backends.backend_agg import FigureCanvasAgg  # noqa: E402
 from matplotlib.figure import Figure as MplFigure  # noqa: E402
 
-from . import api, journals, layout  # noqa: E402
+import matplotlib.lines  # noqa: E402
+from . import api, journals, layout, tables  # noqa: E402
 
 logging.getLogger("matplotlib.font_manager").setLevel(logging.ERROR)
 sys.dont_write_bytecode = True          # running a project's code leaves no __pycache__ in it
@@ -304,6 +305,59 @@ class Renderer:
         r = self._doc(str(out))[0].rect
         return str(out), r.width / MM, r.height / MM
 
+    def table_piece(self, rows: list, header: bool, size: float, family: list, color: str, width: float | None,
+                    decimals=None, align=None) -> tuple[str, float, float]:
+        """(pdf, w mm, h mm) of a table: columns as wide as their text (widened evenly to `width`), numbers to the
+        right, a rule above and below the header and at the bottom."""
+        color = self.c(color)
+        shown, auto = tables.cells(rows, header, decimals)
+        al = tables.resolve_align(align, auto)
+        key = _h("table", shown, al, header, size, family, color, width)
+        out = self.cache / "pieces" / f"{key}.pdf"
+        meta = out.with_suffix(".json")
+        if not (out.exists() and meta.exists()):
+            rc = {"pdf.fonttype": 42, "font.family": "sans-serif", "font.sans-serif": family}
+            pad, rh, rule = size * 0.9, size * 1.55, 0.6          # points
+            with matplotlib.rc_context(rc):
+                fig = MplFigure(figsize=(2, 2), dpi=72)
+                canvas = FigureCanvasAgg(fig)
+                r = canvas.get_renderer()
+                n = len(al)
+                cw = [0.0] * n
+                for i, row in enumerate(shown):
+                    for j, c in enumerate(row):
+                        if c:
+                            t = fig.text(0, 0, c, fontsize=size, fontweight="bold" if header and i == 0 else "normal")
+                            cw[j] = max(cw[j], t.get_window_extent(r).width)
+                            t.remove()
+                cw = [c + 2 * pad for c in cw]
+                W = sum(cw) or 10.0
+                if width and width * MM > W:
+                    cw = [c + (width * MM - W) / max(n, 1) for c in cw]
+                    W = width * MM
+                H = rh * len(shown) + 2 * rule
+                fig.set_size_inches(W / 72, H / 72)
+                xs = [sum(cw[:j]) for j in range(n)]
+                for i, row in enumerate(shown):
+                    y = rule + rh * (i + 0.5)
+                    for j, c in enumerate(row):
+                        x = {"l": xs[j] + pad, "c": xs[j] + cw[j] / 2, "r": xs[j] + cw[j] - pad}[al[j]]
+                        fig.text(x / W, 1 - y / H, c, fontsize=size, color=color, va="center_baseline",
+                                 ha={"l": "left", "c": "center", "r": "right"}[al[j]],
+                                 fontweight="bold" if header and i == 0 else "normal")
+                lines = [(rule / 2, rule), (H - rule / 2, rule)]
+                if header and len(shown) > 1:
+                    lines.append((rule + rh, rule * 0.6))
+                for y, lw in lines:
+                    fig.add_artist(matplotlib.lines.Line2D([0, 1], [1 - y / H] * 2, transform=fig.transFigure,
+                                                           color=color, linewidth=lw, solid_capstyle="butt"))
+                buf = io.BytesIO()
+                fig.savefig(buf, format="pdf", transparent=True)
+            _write(out, buf.getvalue())
+            meta.write_text(json.dumps({"w": W / MM, "h": H / MM}))
+        m = json.loads(meta.read_text())
+        return str(out), m["w"], m["h"]
+
     def c(self, color):
         """A colour as drawn: in dark mode, greys (black text and lines) turn light and light greys dark."""
         if color is None or not self.dark:
@@ -546,6 +600,14 @@ class Renderer:
                     x0 = p["x"] - {"left": 0, "center": w / 2, "right": w}.get(p["align"], 0)
                     box = (x0, p["y"], w, h)
                     steps.append(_pdf_piece(self, oid, "text", box, pdf, meta={"pdf": pdf, "scale": 1.0, "size": size}))
+                elif e.kind == "table":
+                    size = p["size"] or style.size
+                    fam = [p["font"]] + family if p["font"] else family
+                    rows = p["rows"] if p.get("rows") is not None else tables.read_rows(self.resolve(p["source"]))
+                    pdf, w, h = self.table_piece(rows, p["header"], size, fam, p["color"], p.get("w"),
+                                                 p.get("decimals"), p.get("align"))
+                    box = (p["x"], p["y"], w, h)
+                    steps.append(_pdf_piece(self, oid, "table", box, pdf, meta={"pdf": pdf, "scale": 1.0, "size": size}))
                 elif e.kind == "legend":
                     pdf, w, h = self.legend_piece(_legend_entries(p), rc, p["title"], p["ncol"], p["size"])
                     box = (p["x"], p["y"], w, h)
@@ -788,7 +850,8 @@ class Renderer:
                 t = lab.text(n)
                 if t not in explicit:
                     break
-            names[oid] = t
+            if t:                                       # numbering "none": no letters
+                names[oid] = t
         for e, oid, box in panels:
             if isinstance(e.get("label"), str) and e["label"] != "auto":
                 names[oid] = e["label"]
@@ -985,10 +1048,15 @@ class Renderer:
         return got
 
     def export(self, file: str, path: str, fmt: str | None = None, dpi: int = 600, dark: bool = False,
-               cmyk: bool = False, outline: bool = False) -> dict:
+               cmyk: bool = False, outline: bool = False, journal: str | None = None) -> dict:
         """Write the figure to `path` as PDF, SVG, EPS, PNG, TIFF or JPEG (`dark`: its dark version). `cmyk`
         converts colours for print (PDF, EPS, TIFF, JPEG); `outline` turns text into shapes (PDF, EPS, SVG).
-        PDF/EPS conversions use Ghostscript."""
+        PDF/EPS conversions use Ghostscript.
+
+        Resolution follows `journal` (else the style's journal, else the usual standard; see journals.dpi): a
+        TIFF or JPEG is written at least at the dpi asked for line art, or for combination figures when the figure
+        holds pictures; an EPS has anything Ghostscript must rasterize drawn at the line-art dpi. The file written
+        is then measured, and pictures below the dpi asked for photographs are reported (`resolution`, warnings)."""
         self._docs.clear()
         self.dark = dark
         path = str(Path(path) if Path(path).is_absolute() else self._cwd / path)
@@ -999,6 +1067,14 @@ class Renderer:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         if fmt == "png" and cmyk:
             raise ValueError("PNG has no CMYK; export a TIFF or a PDF")
+        journal = (journal or fig.style.props.get("journal") or None)
+        need = journals.dpi(journal)
+        kind = "combination" if doc[0].get_image_info() else "line"
+        notes = []
+        used = int(dpi)
+        if fmt in ("tif", "tiff", "jpg", "jpeg") and used < need[kind]:
+            notes.append(f"{used} dpi raised to {need[kind]} dpi: {self._jname(journal)} that of {kind} figures")
+            used = need[kind]
         if fmt in ("pdf", "eps"):
             doc.set_metadata({"creator": "Fignimble", "producer": "Fignimble (PyMuPDF)", "title": Path(file).stem})
             if fmt == "pdf" and not (cmyk or outline):
@@ -1007,11 +1083,11 @@ class Renderer:
                 with tempfile.TemporaryDirectory() as tmp:
                     src = str(Path(tmp) / "in.pdf")
                     doc.save(src, garbage=3, deflate=True)
-                    _ghostscript(src, path, fmt, cmyk, outline)
+                    _ghostscript(src, path, fmt, cmyk, outline, dpi=need["line"])
         elif fmt == "svg":
             Path(path).write_text(doc[0].get_svg_image(text_as_path=outline), encoding="utf-8")
         elif fmt in ("png", "tif", "tiff", "jpg", "jpeg"):
-            z = dpi / 72
+            z = used / 72
             alpha = fmt == "png" and not self.c(fig.props["background"])
             pix = doc[0].get_pixmap(matrix=pymupdf.Matrix(z, z), alpha=alpha)
             from PIL import Image
@@ -1019,16 +1095,86 @@ class Renderer:
             if cmyk:
                 im = _to_cmyk(im)
             if fmt == "png":
-                im.save(path, dpi=(dpi, dpi))
+                im.save(path, dpi=(used, used))
             elif fmt in ("tif", "tiff"):
-                im.save(path, dpi=(dpi, dpi), compression="tiff_lzw")
+                im.save(path, dpi=(used, used), compression="tiff_lzw")
             else:
-                im.save(path, dpi=(dpi, dpi), quality=95)
+                im.save(path, dpi=(used, used), quality=95)
         else:
             raise ValueError(f"can't export {fmt}; use pdf, svg, eps, png, tiff or jpg")
+        res = self._check_resolution(path, fmt, fig, pieces, need, kind, journal)
+        res["notes"] = notes + res.get("notes", [])
         errors = [i for i in infos if i.get("error")]
-        return {"ok": True, "path": str(Path(path).resolve()), "format": fmt,
-                "warnings": [f"element {i['oid']} failed: {i['error'].strip().splitlines()[-1]}" for i in errors]}
+        return {"ok": True, "path": str(Path(path).resolve()), "format": fmt, "resolution": res,
+                "warnings": [f"element {i['oid']} failed: {i['error'].strip().splitlines()[-1]}" for i in errors]
+                + res["problems"]}
+
+    @staticmethod
+    def _jname(journal):
+        j = journals.JOURNALS.get((journal or "").lower())
+        return j["name"] + " asks" if j else "journals ask"
+
+    def _check_resolution(self, path, fmt, fig, pieces, need, kind, journal) -> dict:
+        """Measure the file written: a raster's own dpi as printed, or every picture inside a PDF or EPS."""
+        out = {"journal": journal, "kind": kind, "need": need, "problems": [], "notes": []}
+        who = self._jname(journal)
+        if fmt in ("png", "tif", "tiff", "jpg", "jpeg"):
+            from PIL import Image
+            with Image.open(path) as im:
+                got = im.size[0] / (fig.width / 25.4)
+                out["dpi"] = round(got)
+                tag = im.info.get("dpi")
+            out["ok"] = got >= need[kind] * 0.99
+            if not out["ok"]:                            # a PNG is a preview or for slides: said, not a problem
+                (out["notes"] if fmt == "png" else out["problems"]).append(
+                    f"{out['dpi']} dpi; {who} {need[kind]} dpi of {kind} figures")
+            if tag and abs(float(tag[0]) - got) > 1:
+                out["problems"].append(f"the file says {float(tag[0]):.0f} dpi but holds {got:.0f}")
+            return out
+        if fmt == "svg":
+            out["ok"] = True
+            return out
+        check, tmp = path, None
+        if fmt == "eps":
+            gs = _gs()
+            if gs is None:
+                out["ok"] = None
+                out["notes"].append("not measured (no Ghostscript)")
+                return out
+            tmp = tempfile.TemporaryDirectory()
+            check = str(Path(tmp.name) / "back.pdf")
+            subprocess.run([gs, "-dNOPAUSE", "-dBATCH", "-dSAFER", "-dQUIET", "-dEPSCrop", "-sDEVICE=pdfwrite",
+                            f"-sOutputFile={check}", path], capture_output=True)
+        try:
+            with pymupdf.open(check) as d:
+                page = d[0]
+                sx = fig.width * MM / page.rect.width                 # an EPS may come back at another scale
+                worst = None
+                for im in page.get_image_info():
+                    bx0, by0, bx1, by1 = im["bbox"]
+                    wi = (bx1 - bx0) * sx / 72
+                    if wi < 0.2 or not im.get("width"):
+                        continue
+                    got = im["width"] / wi
+                    cx, cy = (bx0 + bx1) / 2 * sx / MM, (by0 + by1) / 2 * sx / MM
+                    oid = next((pc.oid for pc in reversed(pieces) if pc.box[0] <= cx <= pc.box[0] + pc.box[2]
+                                and pc.box[1] <= cy <= pc.box[1] + pc.box[3]), None)
+                    if worst is None or got < worst[0]:
+                        worst = (got, oid)
+                    if got < need["photo"] * 0.98:
+                        out["problems"].append(f"a picture{f' in element {oid}' if oid else ''} is {got:.0f} dpi as "
+                                               f"printed; {who} {need['photo']} dpi: use a larger picture or "
+                                               "print it smaller")
+        except Exception as exc:                          # noqa: BLE001
+            out["ok"] = None
+            out["notes"].append(f"not measured ({exc})")
+            return out
+        finally:
+            if tmp:
+                tmp.cleanup()
+        out["pictures"] = round(worst[0]) if worst else None
+        out["ok"] = not out["problems"]
+        return out
 
 
 # --- helpers ---
@@ -1685,11 +1831,18 @@ def _rich(text: str, bold_base: bool, width, fig, props) -> str:
     return "\n".join(_as_mathtext(l, bold_base) for l in lines)
 
 
-def _ghostscript(src: str, dest: str, fmt: str, cmyk: bool, outline: bool):
-    gs = shutil.which("gs") or next((p for p in ("/opt/homebrew/bin/gs", "/usr/local/bin/gs") if Path(p).exists()), None)
+def _gs():
+    return shutil.which("gs") or next((p for p in ("/opt/homebrew/bin/gs", "/usr/local/bin/gs") if Path(p).exists()), None)
+
+
+def _ghostscript(src: str, dest: str, fmt: str, cmyk: bool, outline: bool, dpi: int = 1200):
+    """Convert with Ghostscript. `dpi`: the resolution of anything it has to rasterize (EPS has no transparency),
+    and pictures keep their pixels (no downsampling)."""
+    gs = _gs()
     if gs is None:
         raise RuntimeError("EPS, CMYK PDF and outlined text need Ghostscript: brew install ghostscript")
-    args = [gs, "-dNOPAUSE", "-dBATCH", "-dSAFER", "-dQUIET",
+    args = [gs, "-dNOPAUSE", "-dBATCH", "-dSAFER", "-dQUIET", f"-r{int(dpi)}",
+            "-dDownsampleColorImages=false", "-dDownsampleGrayImages=false", "-dDownsampleMonoImages=false",
             "-sDEVICE=" + ("eps2write" if fmt == "eps" else "pdfwrite"), f"-sOutputFile={dest}"]
     if cmyk:
         args += ["-sColorConversionStrategy=CMYK", "-dProcessColorModel=/DeviceCMYK"]

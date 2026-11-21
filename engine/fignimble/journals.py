@@ -1,12 +1,16 @@
-"""Figure sizes and label conventions of some journals.
+"""Figure sizes, label conventions and resolutions of some journals.
 
-Widths are in millimetres. They follow the journals' author guidelines as of 2026; check the current guidelines
-before submitting, since journals revise them.
+Widths are in millimetres. `dpi` is the least resolution, as printed, asked of raster figures and of the pictures
+inside vector ones: "photo" for photographs and micrographs alone (halftones), "combination" for pictures with text
+or line art, "line" for line art alone (plots, diagrams, text). Widths and fonts follow the journals' author
+guidelines as of 2026; the resolutions are the usual production values (300/600/1200, Cell Press 300/500/1000).
+Check the current guidelines before submitting, since journals revise them.
 """
 
 JOURNALS = {
     "nature": {
         "name": "Nature",
+        "dpi": {"photo": 300, "combination": 600, "line": 1200},
         "widths": {"single": 89, "double": 183},
         "font": "Arial",
         "font_size": 7,
@@ -15,6 +19,7 @@ JOURNALS = {
     },
     "science": {
         "name": "Science",
+        "dpi": {"photo": 300, "combination": 600, "line": 1200},
         "widths": {"single": 57, "double": 121, "triple": 184},
         "font": "Helvetica",
         "font_size": 7,
@@ -23,6 +28,7 @@ JOURNALS = {
     },
     "cell": {
         "name": "Cell Press",
+        "dpi": {"photo": 300, "combination": 500, "line": 1000},
         "widths": {"single": 85, "one-and-a-half": 114, "double": 174},
         "font": "Arial",
         "font_size": 7,
@@ -31,6 +37,7 @@ JOURNALS = {
     },
     "pnas": {
         "name": "PNAS",
+        "dpi": {"photo": 300, "combination": 600, "line": 1200},
         "widths": {"single": 87, "one-and-a-half": 114, "double": 178},
         "font": "Arial",
         "font_size": 7,
@@ -39,6 +46,7 @@ JOURNALS = {
     },
     "elife": {
         "name": "eLife",
+        "dpi": {"photo": 300, "combination": 600, "line": 1200},
         "widths": {"single": 85, "double": 178},
         "font": "Arial",
         "font_size": 7,
@@ -46,6 +54,16 @@ JOURNALS = {
         "labels": {"case": "upper", "weight": "bold", "size": 9, "format": "{}"},
     },
 }
+
+
+# what most journals ask when no journal is named (and the usual production standard)
+DEFAULT_DPI = {"photo": 300, "combination": 600, "line": 1200}
+
+
+def dpi(journal: str | None) -> dict:
+    """The resolutions (dpi) `journal` asks for: {photo, combination, line}."""
+    j = JOURNALS.get((journal or "").lower())
+    return dict(j["dpi"]) if j else dict(DEFAULT_DPI)
 
 
 def width(journal: str, columns="double") -> float:

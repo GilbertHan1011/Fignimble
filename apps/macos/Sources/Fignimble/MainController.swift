@@ -41,7 +41,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
     private var queue: Task<Void, Never>?
     private var nudgeTotal = CGPoint.zero
     private var nudgeWork: DispatchWorkItem?
-    private var lastPx: Double = 12
+    private(set) var lastPx: Double = 12
     /// The look copied by Copy Style, for Paste Style.
     private var copiedStyle: [String: Any]?
     static let pasteType = NSPasteboard.PasteboardType("org.pachterlab.fignimble.code")
@@ -226,7 +226,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
     func waitForQueue() async { await queue?.value }
 
     /// Run engine work one piece at a time, in order.
-    private func enqueue(_ work: @escaping @MainActor () async -> Void) {
+    func enqueue(_ work: @escaping @MainActor () async -> Void) {
         let prev = queue
         queue = Task { @MainActor in
             await prev?.value
@@ -321,7 +321,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         enqueue { [self] in await load(name) }
     }
 
-    private func apply(_ r: [String: Any]) {
+    func apply(_ r: [String: Any]) {
         let f = FigureData(r)
         figure = f
         canvas.setFigure(f)
@@ -383,7 +383,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
     // MARK: messages
 
     private var busyShown = false
-    private func busy(_ text: String?) {
+    func busy(_ text: String?) {
         busyShown = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
             guard let self, self.busyShown else { return }
@@ -777,7 +777,9 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
 
     @objc func labelFormat(_ sender: NSMenuItem) {
         let p = Inspector.labelFormats[sender.tag]
-        edit(["op": "labels", "props": ["format": p.1, "case": p.2]])
+        var props: [String: Any] = ["format": p.1, "case": p.2]
+        if figure?.labelStyle["numbering"] as? String == "none" { props["numbering"] = "alpha" }     // letters again
+        edit(["op": "labels", "props": props])
     }
     @objc func labelJournal(_ sender: NSMenuItem) {
         guard let k = sender.representedObject as? String, let lab = journals[k]?["labels"] as? [String: Any] else { return }
@@ -952,20 +954,53 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         }
     }
 
+    /// The resolutions (dpi) a journal asks for: photo, combination, line (the usual standard when none is named).
+    func journalDPI(_ key: String?) -> (photo: Int, combination: Int, line: Int) {
+        guard let k = key, let d = journals[k]?["dpi"] as? [String: Any] else { return (300, 600, 1200) }
+        let n = { (s: String, v: Int) in (d[s] as? NSNumber)?.intValue ?? v }
+        return (n("photo", 300), n("combination", 600), n("line", 1200))
+    }
+
     @objc func exportFigure(_ sender: Any?) {
-        guard let name = current else { return }
+        guard let name = current, let f = figure else { return }
         let p = NSSavePanel()
         let format = NSPopUpButton(frame: .zero, pullsDown: false)
-        let formats = ["pdf", "svg", "eps", "png", "tiff", "jpg"]
-        format.addItems(withTitles: ["PDF (vector)", "SVG (vector)", "EPS (vector)", "PNG", "TIFF", "JPEG"])
+        let formats = ["pdf", "eps", "tiff", "svg", "png", "jpg"]
+        format.addItems(withTitles: ["PDF (vector)", "EPS (vector)", "TIFF", "SVG (vector)", "PNG", "JPEG"])
+        let dpis = [300, 500, 600, 1000, 1200]
         let dpi = NSPopUpButton(frame: .zero, pullsDown: false)
-        dpi.addItems(withTitles: ["300 dpi", "600 dpi", "1200 dpi"]); dpi.selectItem(at: 1)
-        let fmtAction = Action { _ in
-            p.allowedContentTypes = [UTType(filenameExtension: formats[format.indexOfSelectedItem]) ?? .data]
-            p.nameFieldStringValue = name + "." + formats[format.indexOfSelectedItem]
-            dpi.isEnabled = format.indexOfSelectedItem >= 3
+        dpi.addItems(withTitles: dpis.map { "\($0) dpi" }); dpi.selectItem(at: 2)
+        // the journal whose resolutions the export meets: the style's, or another
+        let keys: [String?] = [nil, "nature", "science", "cell", "pnas", "elife"]
+        let styleJournal = f.style["journal"] as? String
+        let journal = NSPopUpButton(frame: .zero, pullsDown: false)
+        journal.addItems(withTitles: ["Usual standard"] + keys.dropFirst().map { (journals[$0!]?["name"] as? String) ?? $0! })
+        journal.selectItem(at: keys.firstIndex { $0 == styleJournal } ?? 0)
+        let note = NSTextField(wrappingLabelWithString: "")
+        note.font = Theme.font(10.5); note.textColor = .secondaryLabelColor; note.preferredMaxLayoutWidth = 560
+        // pictures make it a combination figure (the engine checks the pixels themselves)
+        let pictures = f.elements.contains { e in
+            let src = (e.kind == "inset" ? e.item["source"] : e.props["source"]) as? String ?? ""
+            return (e.kind == "image" || (e.kind == "inset" && e.inner == "image")) && !src.lowercased().hasSuffix(".svg") && !src.lowercased().hasSuffix(".pdf")
         }
+        let refresh = { (pickDPI: Bool) in
+            let fmt = formats[format.indexOfSelectedItem]
+            let d = self.journalDPI(keys[journal.indexOfSelectedItem])
+            let raster = ["tiff", "png", "jpg"].contains(fmt)
+            dpi.isEnabled = raster
+            if pickDPI, raster, let i = dpis.firstIndex(where: { $0 >= (pictures ? d.combination : d.line) }) { dpi.selectItem(at: i) }
+            let who = journal.titleOfSelectedItem ?? ""
+            let need = "\(who): \(d.line) dpi for line art, \(d.combination) for figures with pictures, \(d.photo) for the pictures in a vector file."
+            note.stringValue = need + (raster
+                ? " This figure \(pictures ? "has pictures" : "is line art"): a lower setting is raised to \(pictures ? d.combination : d.line) dpi (except PNG)."
+                : " Vector stays sharp at any size; pictures inside below \(d.photo) dpi are reported.")
+                + " The file is measured once written."
+            p.allowedContentTypes = [UTType(filenameExtension: fmt) ?? .data]
+            p.nameFieldStringValue = name + "." + fmt
+        }
+        let fmtAction = Action { _ in refresh(true) }
         format.target = fmtAction; format.action = #selector(Action.fire(_:))
+        journal.target = fmtAction; journal.action = #selector(Action.fire(_:))
         let cmykBox = NSButton(checkboxWithTitle: "CMYK", target: nil, action: nil)
         cmykBox.toolTip = "Colours converted for print (PDF, EPS, TIFF, JPEG; PDF and EPS through Ghostscript)"
         let outlineBox = NSButton(checkboxWithTitle: "Text as outlines", target: nil, action: nil)
@@ -973,23 +1008,33 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         let darkBox = NSButton(checkboxWithTitle: "Dark version", target: nil, action: nil)
         darkBox.state = darkPreview ? .on : .off
         darkBox.toolTip = "White text and lines on black, for slides"
-        let acc = NSStackView(views: [NSTextField(labelWithString: "Format:"), format, NSTextField(labelWithString: "Resolution:"), dpi, cmykBox, outlineBox, darkBox])
+        let top = NSStackView(views: [NSTextField(labelWithString: "Format:"), format, NSTextField(labelWithString: "For:"), journal,
+                                      NSTextField(labelWithString: "Resolution:"), dpi])
+        let boxes = NSStackView(views: [cmykBox, outlineBox, darkBox])
+        let acc = NSStackView(views: [top, boxes, note]); acc.orientation = .vertical; acc.alignment = .leading
         acc.edgeInsets = NSEdgeInsets(top: 8, left: 8, bottom: 8, right: 8)
         p.accessoryView = acc
-        p.nameFieldStringValue = name + ".pdf"; p.allowedContentTypes = [.pdf]; dpi.isEnabled = false
+        refresh(true)
         if let proj = project { p.directoryURL = URL(fileURLWithPath: proj) }
         p.beginSheetModal(for: window) { [weak self] r in
             _ = fmtAction
             guard let self, r == .OK, let u = p.url else { return }
-            let fmt = formats[format.indexOfSelectedItem], d = [300, 600, 1200][dpi.indexOfSelectedItem]
+            let fmt = formats[format.indexOfSelectedItem], d = dpis[dpi.indexOfSelectedItem]
             let dark = darkBox.state == .on, cmyk = cmykBox.state == .on, outline = outlineBox.state == .on
+            var args: [String: Any] = ["figure": name, "path": u.path, "format": fmt, "dpi": d, "dark": dark, "cmyk": cmyk, "outline": outline]
+            if let j = keys[journal.indexOfSelectedItem] { args["journal"] = j }
             self.enqueue { [weak self] in guard let self else { return }
                 busy("Exporting…")
                 do {
-                    let r = try await self.engine.json("export", ["figure": name, "path": u.path, "format": fmt, "dpi": d, "dark": dark,
-                                                                          "cmyk": cmyk, "outline": outline])
-                    let w = (r["warnings"] as? [String] ?? [])
-                    toast("Exported \(u.lastPathComponent)" + (w.isEmpty ? "" : " (\(w.count) element\(w.count == 1 ? "" : "s") failed)"), error: !w.isEmpty)
+                    let r = try await self.engine.json("export", args)
+                    let w = r["warnings"] as? [String] ?? []
+                    let rz = r["resolution"] as? [String: Any] ?? [:]
+                    var said = "Exported \(u.lastPathComponent)"
+                    if let got = rz["dpi"] as? NSNumber { said += " at \(got.intValue) dpi" }
+                    else if let pic = rz["pictures"] as? NSNumber { said += ": vector, pictures at \(pic.intValue) dpi or more" }
+                    else if fmt != "svg" { said += ": vector" }
+                    if let n = (rz["notes"] as? [String])?.first { said += " (\(n))" }
+                    toast(w.isEmpty ? said : said + ". " + w.joined(separator: "; "), error: !w.isEmpty)
                 } catch { toast(error.localizedDescription, error: true) }
             }
         }
@@ -1078,6 +1123,8 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
             if figure.map({ f in selElements.contains { f.element($0)?.group != nil } }) == true { item("Ungroup", #selector(ungroup(_:))) }
             item("Duplicate", #selector(duplicate(_:)))
             item("Delete", #selector(deleteSelected(_:)))
+            if sel.count == 1, figure?.element(sel[0])?.kind == "table" { item("Export Table as Word…", #selector(exportTable(_:))) }
+            if sel.count == 1, let e = figure?.element(sel[0]), remoteOrigin(of: e) != nil { item("Update from Server", #selector(updateFromServer(_:))) }
             let bc = bioCartoonMenuItems()
             if !bc.isEmpty { m.addItem(.separator()); bc.forEach { m.addItem($0) } }
         } else {
@@ -1113,11 +1160,15 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         case #selector(toggleSmartGuides(_:)): item.state = canvas.smartGuides ? .on : .off
         case #selector(toggleSidebar(_:)): item.title = navigator.isHidden ? "Show Figures and Layers" : "Hide Figures and Layers"
         case #selector(toggleInspector(_:)): item.title = rightHost.isHidden ? "Show Inspector" : "Hide Inspector"
+        case #selector(labelsNone(_:)): item.state = figure?.labelStyle["numbering"] as? String == "none" ? .on : .off; return figure != nil
+        case #selector(exportTable(_:)): return sel.count == 1 && figure?.element(sel[0])?.kind == "table"
+        case #selector(insertTable(_:)), #selector(insertRemotePanel(_:)): return figure != nil
         case #selector(toggleLabelAlign(_:)): item.state = (figure?.labelStyle["align"] as? Bool ?? true) ? .on : .off; return figure != nil
         case #selector(toggleLabelOrder(_:)): item.state = (figure?.labelStyle["order"] as? String) == "source" ? .on : .off; return figure != nil
         case #selector(labelFormat(_:)):
             let p = Inspector.labelFormats[item.tag]
-            item.state = (figure?.labelStyle["format"] as? String == p.1 && figure?.labelStyle["case"] as? String == p.2) ? .on : .off
+            item.state = (figure?.labelStyle["format"] as? String == p.1 && figure?.labelStyle["case"] as? String == p.2
+                          && figure?.labelStyle["numbering"] as? String != "none") ? .on : .off
             return figure != nil
         case #selector(copy(_:)): return figure != nil
         case #selector(deleteSelected(_:)), #selector(delete(_:)), #selector(editCode(_:)):

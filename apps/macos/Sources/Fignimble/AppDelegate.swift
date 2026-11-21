@@ -75,7 +75,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                       item("Apply Code Changes", #selector(MainController.saveCode(_:)), "s"),
                       item("Show Project in Finder", #selector(MainController.revealProject(_:))), sep(),
                       item("Export Figure…", #selector(MainController.exportFigure(_:)), "e"),
-                      item("Export All Figures as PDF…", #selector(MainController.exportAll(_:)), "e", [.command, .shift]), sep(),
+                      item("Export All Figures as PDF…", #selector(MainController.exportAll(_:)), "e", [.command, .shift]),
+                      item("Export Table as Word…", #selector(MainController.exportTable(_:))), sep(),
                       item("Close", #selector(NSWindow.performClose(_:)), "w", to: nil)])
         menu("Edit", [item("Undo", #selector(MainController.undoEdit(_:)), "z"),
                       item("Redo", #selector(MainController.redoEdit(_:)), "z", [.command, .shift]), sep(),
@@ -91,6 +92,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         item("Panel from Existing Code…", #selector(MainController.insertPanelCode(_:))),
                         item("Picture…", #selector(MainController.insertImage(_:)), "i", [.command, .shift]),
                         item("BioCartoon Icons…", #selector(MainController.showBioCartoon(_:)), "b", [.command, .shift]),
+                        item("Table from CSV…", #selector(MainController.insertTable(_:))),
+                        item("Panel from SSH Server…", #selector(MainController.insertRemotePanel(_:))),
                         item("Scale Bar on Picture…", #selector(MainController.addScaleBar(_:))),
                         item("Zoom Box", #selector(MainController.addZoom(_:))), sep()]
              + Tool.allCases.dropFirst().map { t in
@@ -122,7 +125,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             i.representedObject = k; return i
         }
         menu("Labels", Inspector.labelFormats.enumerated().map { i, f in item("Style  \(f.0)  \(f.0 == "a" ? "b c" : "…")".replacingOccurrences(of: "  …", with: ""), #selector(MainController.labelFormat(_:)), tag: i) }
-             + [sep(), sub("Journal Convention", journalItems), sep(),
+             + [item("No Letters", #selector(MainController.labelsNone(_:))), sep(), sub("Journal Convention", journalItems), sep(),
                 item("Labels Outside Panels (above left)", #selector(MainController.labelsOutside(_:))),
                 item("Labels at Panel Corners", #selector(MainController.labelsInside(_:))), sep(),
                 item("Line Up Labels in Rows and Columns", #selector(MainController.toggleLabelAlign(_:))),

@@ -15,6 +15,7 @@ extension MainController {
             if ProcessInfo.processInfo.environment["FIGNIMBLE_SHOTS_SCENE"] == "code" { await codeShots(dir); return }
             if ProcessInfo.processInfo.environment["FIGNIMBLE_SHOTS_SCENE"] == "colors" { await colorShots(dir); return }
             if ProcessInfo.processInfo.environment["FIGNIMBLE_SHOTS_SCENE"] == "parts" { await partShots(dir); return }
+            if ProcessInfo.processInfo.environment["FIGNIMBLE_SHOTS_SCENE"] == "more" { await moreShots(dir); return }
             shot(dir, "01-figure")
             canvas.selection = ["1"]
             await settle(); shot(dir, "02-panel-selected")
@@ -216,6 +217,67 @@ extension MainController {
         NSApp.terminate(nil)
     }
 
+    /// The export dialog, no panel letters, a table and its Word file, a panel from an SSH server
+    /// (FIGNIMBLE_SSH: a stand-in for ssh), Update from Server.
+    private func moreShots(_ dir: String) async {
+        exportFigure(nil)
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+        // the save panel itself is drawn by another process: the options Fignimble adds to it
+        if let sheet = window.attachedSheet, let v = (sheet as? NSSavePanel)?.accessoryView, let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) {
+            v.cacheDisplay(in: v.bounds, to: rep)
+            try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: dir).appendingPathComponent("M1-export-dialog.png"))
+            window.endSheet(sheet)
+        }
+        labelsNone(nil)
+        await settle(); shot(dir, "M2-no-letters")
+        Engine.note("more: labels after No Letters \(figure?.labels.count ?? -1)")
+        labelsNone(nil); await settle()
+        Engine.note("more: labels back \(figure?.labels.count ?? -1)")
+        // a table from a CSV, then as Word
+        let csv = URL(fileURLWithPath: dir).appendingPathComponent("genes.csv")
+        try? "Gene,Cells,Fold change\nCD3E,1204,2.4512\nLYZ,2950,1.10\n".write(to: csv, atomically: true, encoding: .utf8)
+        importFiles([csv], at: CGPoint(x: 100, y: 88))
+        await settle()
+        if let t = figure?.elements.last, t.kind == "table" {
+            canvas.selection = [t.oid]
+            await settle(); shot(dir, "M3-table")
+            let out = dir + "/genes.docx"
+            let r = (try? await engine.json("export_table", ["figure": current ?? "", "oid": t.oid, "path": out])) ?? [:]
+            Engine.note("more: table \(t.title(label: nil)) box \(t.box) docx \(r["ok"] ?? "-") \(FileManager.default.fileExists(atPath: out)) menu \(contextMenu().items.map(\.title).filter { $0.contains("Word") })")
+        } else { Engine.note("more: no table") }
+        // the SSH dialog lists a folder on the "server"
+        canvas.selection = []
+        let d = RemoteDialog(main: self)
+        var fetched: (String, String)?
+        d.onImport = { h, p in fetched = (h, p) }
+        d.begin()
+        try? await Task.sleep(nanoseconds: 800_000_000)
+        if let host = d.panel.contentView?.firstDescendant(NSComboBox.self) { host.stringValue = "lab-server" }
+        if let field = d.panel.contentView?.descendants(NSTextField.self).first(where: { $0.placeholderString?.hasPrefix("folder") == true }) { field.stringValue = "~/analysis" }
+        d.list()
+        try? await Task.sleep(nanoseconds: 2_500_000_000)
+        if let v = d.panel.contentView, let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) {
+            v.cacheDisplay(in: v.bounds, to: rep)
+            try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: dir).appendingPathComponent("M4-ssh-dialog.png"))
+        }
+        if let table = d.panel.contentView?.firstDescendant(NSTableView.self), let i = (0..<table.numberOfRows).first(where: { r in
+            (table.view(atColumn: 0, row: r, makeIfNecessary: true)?.descendants(NSTextField.self).first?.stringValue ?? "").hasSuffix(".py") }) {
+            table.selectRowIndexes([i], byExtendingSelection: false)
+            d.perform(Selector(("doImport")))
+        }
+        Engine.note("more: dialog chose \(fetched.map { "\($0.0):\($0.1)" } ?? "nothing")")
+        window.attachedSheet.map { window.endSheet($0) }
+        if let (h, p) = fetched, let name = current {
+            let r = (try? await engine.json("import_remote", ["figure": name, "host": h, "path": p, "x": 60.0, "y": 60.0, "pxPerMM": lastPx])) ?? [:]
+            if let fig = r["figure"] as? [String: Any] { apply(fig) }
+            if let sel = r["select"] as? [String] { canvas.selection = sel }
+            await settle(); shot(dir, "M5-remote-panel")
+            let e = canvas.selection.first.flatMap { figure?.element($0) }
+            Engine.note("more: import \(r["ok"] ?? "-") \(r["error"] ?? "") origin \(e.flatMap { remoteOrigin(of: $0) } ?? "-") error \(e?.error ?? "none") menu \(contextMenu().items.map(\.title).filter { $0.contains("Server") })")
+        }
+        NSApp.terminate(nil)
+    }
+
     private func settle() async {
         try? await Task.sleep(nanoseconds: 300_000_000)
         await waitForQueue()
@@ -240,4 +302,11 @@ extension MainController {
         try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: dir).appendingPathComponent(name + ".png"))
         Engine.note("shot \(name)")
     }
+}
+
+private extension NSView {
+    func descendants<T: NSView>(_ type: T.Type) -> [T] {
+        subviews.flatMap { ($0 as? T).map { [$0] } ?? [] } + subviews.flatMap { $0.descendants(type) }
+    }
+    func firstDescendant<T: NSView>(_ type: T.Type) -> T? { descendants(type).first }
 }

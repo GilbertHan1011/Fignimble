@@ -17,11 +17,12 @@ import queue
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
 
-from . import srcedit, templates
+from . import remote, srcedit, tables, templates
 from .render import SKIP_DIRS, is_figure_source
 from .srcedit import REMOVE, EditError, Raw, Source
 
@@ -32,6 +33,7 @@ GEOMETRY = {"panel": ("x", "y"), "image": ("x", "y"), "text": ("x", "y"), "rect"
 METHOD_KIND = {"panel": "panel", "image": "image", "text": "text", "line": "line", "arrow": "line", "rect": "rect",
                "ellipse": "ellipse", "bracket": "bracket", "layout": "layout", "legend": "legend", "path": "path"}
 BOXED = ("panel", "image", "rect", "ellipse", "layout")
+TABLE_FILES = (".csv", ".tsv")
 INSET_KEYS = {"x", "y", "w", "h", "label", "group", "name"}
 
 
@@ -644,6 +646,8 @@ class Session:
             self._set(plan, data, info, {"size": round(size * ratio * 4) / 4, "x": ax, "y": y})
         elif k == "bracket":
             self._set(plan, data, info, {"x1": x, "x2": x + w})
+        elif k == "table":
+            self._set(plan, data, info, {"x": x, "y": y, "w": round(w, 2)})
         else:
             raise EditError(f"a {k} can't be resized that way")
         return "Resize"
@@ -1274,7 +1278,8 @@ class Session:
             raise EditError(f"no file {src}")
         if str(src).startswith(str(self.project) + os.sep):
             return src.relative_to(self.project)
-        dest_dir = self.project / ("panels" if src.suffix == ".py" else "images")
+        dest_dir = self.project / ("panels" if src.suffix == ".py" else
+                                   "tables" if src.suffix.lower() in TABLE_FILES else "images")
         dest_dir.mkdir(exist_ok=True)
         dest = dest_dir / src.name
         n = 1
@@ -1325,7 +1330,7 @@ class Session:
             props["points"] = [tuple(q) for q in props["points"]]
         src, end, ind = self._insert_point(plan, data)
         var = srcedit.figure_var(src)
-        first = {"panel": "source", "image": "source", "text": "text"}.get(kind)
+        first = {"panel": "source", "image": "source", "text": "text", "table": "source"}.get(kind)
         args = [props.pop(first)] if first else []
         if kind in ("line", "arrow"):
             args = [props.pop(k) for k in ("x1", "y1", "x2", "y2")]
@@ -1591,6 +1596,9 @@ class Session:
         except EditError as exc:
             return {"ok": False, "error": str(exc)}
         x, y = float(a.get("x", 5)), float(a.get("y", 5))
+        if src.suffix.lower() in TABLE_FILES:
+            return self.edit({"figure": a["figure"], "op": "insert", "kind": "table", "pxPerMM": a.get("pxPerMM"),
+                              "props": {"source": str(rel), "x": x, "y": y}})
         if src.suffix == ".py":
             text = src.read_text(encoding="utf-8", errors="replace")
             fn = "draw"
@@ -1610,13 +1618,85 @@ class Session:
         return self.edit({"figure": a["figure"], "op": "insert", "kind": "image", "pxPerMM": a.get("pxPerMM"),
                           "props": props})
 
+    # --- panels from an SSH server ---
+
+    def remote_list(self, a: dict) -> dict:
+        """A folder on a server: {host, path?} -> {ok, host, path, entries: [{name, dir}]} (folders and .py files)."""
+        try:
+            return {"ok": True, **remote.list_dir(a["host"], a.get("path") or "")}
+        except remote.RemoteError as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def import_remote(self, a: dict) -> dict:
+        """A panel's code from a server, placed on the figure: {figure, host, path, x, y}. It is copied into
+        panels/ with a first line saying where from, so Update from Server can fetch it again."""
+        host, path = a["host"], a["path"]
+        name = Path(path).name
+        if not name.endswith(".py"):
+            return {"ok": False, "error": f"{name} isn't a Python file"}
+        (self.project / "panels").mkdir(exist_ok=True)
+        dest = self.project / "panels" / name
+        n = 1
+        while dest.exists():
+            n += 1
+            dest = self.project / "panels" / f"{Path(name).stem}-{n}.py"
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                got = remote.fetch(host, path, Path(tmp) / name)
+            except remote.RemoteError as exc:
+                return {"ok": False, "error": f"couldn't fetch {host}:{path}: {exc}"}
+            text = got.read_text(encoding="utf-8", errors="replace")
+        try:
+            ast.parse(text)
+        except SyntaxError as exc:
+            return {"ok": False, "error": f"{name} isn't valid Python (line {exc.lineno}): {exc.msg}"}
+        dest.write_text(remote.with_header(text, host, path), encoding="utf-8")
+        res = self.import_file({**a, "path": str(dest)})
+        if not res.get("ok"):
+            dest.unlink(missing_ok=True)
+        return {**res, "file": str(dest)}
+
+    def update_remote(self, a: dict) -> dict:
+        """Fetch a panel file again from the server it came from: {file, figure?} (one undo step)."""
+        path = Path(a["file"])
+        if not path.is_absolute():
+            path = self.project / path
+        where = remote.origin(path.read_text(encoding="utf-8", errors="replace")) if path.exists() else None
+        if where is None:
+            return {"ok": False, "error": f"{path.name} wasn't fetched from a server"}
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                got = remote.fetch(where[0], where[1], Path(tmp) / path.name)
+            except remote.RemoteError as exc:
+                return {"ok": False, "error": f"couldn't fetch {where[0]}:{where[1]}: {exc}"}
+            text = got.read_text(encoding="utf-8", errors="replace")
+        return self.write_source({"file": str(path), "text": remote.with_header(text, *where), "figure": a.get("figure"),
+                                  "pxPerMM": a.get("pxPerMM")})
+
+    def export_table(self, a: dict) -> dict:
+        """A table of a figure as a Word file: {figure, oid, path} -> {ok, path}. In the figure's font and the
+        table's size, with its header, decimals and alignment."""
+        data = self.render(a["figure"])
+        if data.get("error"):
+            return {"ok": False, "error": "the figure's code doesn't run; fix it first"}
+        info = self._info(data, a["oid"])
+        if info["kind"] != "table":
+            return {"ok": False, "error": "only a table can be exported as a Word file"}
+        p = info["props"]
+        rows = p["rows"] if p.get("rows") is not None else tables.read_rows(self.project / p["source"])
+        st = data["style"]["props"]
+        path = tables.write_docx(rows, a["path"], header=p.get("header", True), decimals=p.get("decimals"),
+                                 align=p.get("align"), font=p.get("font") or st.get("font") or "Arial",
+                                 size=p.get("size") or st.get("size") or 7, title=a.get("title"))
+        return {"ok": True, "path": path}
+
     def export(self, a: dict) -> dict:
         with self.render_lock:
             return self.worker.request({"cmd": "export", "project": str(self.project), "cache": str(self.cache),
                                         "file": self.figure_file(a["figure"]), "path": a["path"],
                                         "format": a.get("format"), "dpi": a.get("dpi", 600),
                                         "dark": bool(a.get("dark")), "cmyk": bool(a.get("cmyk")),
-                                        "outline": bool(a.get("outline"))}, timeout=600)
+                                        "outline": bool(a.get("outline")), "journal": a.get("journal")}, timeout=600)
 
 
 def _natural(s: str):

@@ -122,7 +122,8 @@ class Labels:
 
     format    the label around the letter: "{}" -> a, "({})" -> (a), "{})" -> a), "{}." -> a.
     case      "lower" or "upper"
-    numbering "alpha" (a, b, c), "roman" (i, ii, iii) or "arabic" (1, 2, 3)
+    numbering "alpha" (a, b, c), "roman" (i, ii, iii), "arabic" (1, 2, 3) or "none" (no letters; a panel's own
+              label="a'" still shows)
     font, size (pt), weight ("bold" or "normal"), style ("normal" or "italic"), color
     dx, dy    where a label sits, in mm from its panel's top-left corner (negative: outside, to the left / above)
     order     "reading" (rows top to bottom, then left to right) or "source" (the order of the code)
@@ -155,6 +156,8 @@ class Labels:
     def text(self, i: int) -> str:
         """The label of the i-th panel (1-based)."""
         p = self.props
+        if p["numbering"] == "none":
+            return ""
         core = {"alpha": _alpha, "roman": _roman, "arabic": str}.get(p["numbering"], _alpha)(i)
         core = core.upper() if p["case"] == "upper" else core.lower()
         return p["format"].replace("{}", core) if "{}" in p["format"] else core
@@ -386,7 +389,7 @@ class Element:
             return (min(p["x1"], p["x2"]), min(p["y1"], p["y2"]), abs(p["x2"] - p["x1"]), abs(p["y2"] - p["y1"]))
         if self.kind == "bracket":
             return (min(p["x1"], p["x2"]), p["y"] - p["tick"], abs(p["x2"] - p["x1"]), p["tick"])
-        if self.kind in ("text", "legend"):
+        if self.kind in ("text", "legend", "table"):
             return (p["x"], p["y"], 0.0, 0.0)
         if self.kind == "path":
             xs, ys = [q[0] for q in p["points"]], [q[1] for q in p["points"]]
@@ -509,6 +512,22 @@ class Figure:
                                               opacity=opacity,
                                               group=group,
                                               name=name, locked=locked, hidden=hidden))
+
+    def table(self, source: str | None = None, x: float = 0, y: float = 0, w: float | None = None,
+              rows: list | None = None, header: bool = True, size: float | None = None, decimals=None,
+              align=None, font: str | None = None, color: str = "#000000", group: str | None = None,
+              name: str | None = None, locked: bool = False, hidden: bool = False) -> Element:
+        """A table from a .csv, .tsv or .txt file (`source`, relative to the project) or from `rows` ([["Gene",
+        "n"], ["CD3E", 12], ...]). (x, y) is its top-left; `w` (mm) widens it (it is never narrower than its text).
+        The first row is the header (`header=False`: none). `decimals` rounds numbers with decimals (2, or
+        [None, 0, 2, 3] per column); `align` is "lrr"
+        (left/centre/right per column), else numbers go right and words left. Size in pt; default the style's.
+        Rules above and below the header and at the bottom, as in a printed paper. Journals want tables as text:
+        the editor's Export Table as Word (and `fignimble table`) writes it as a .docx."""
+        return self._add("table", "table", dict(source=None if source is None else str(source), x=x, y=y, w=w,
+                                                rows=None if rows is None else [list(r) for r in rows],
+                                                header=header, size=size, decimals=decimals, align=align, font=font,
+                                                color=color, group=group, name=name, locked=locked, hidden=hidden))
 
     def line(self, x1: float, y1: float, x2: float, y2: float, width: float = 0.5, color: str = "#000000",
              arrow: str | None = None, dash: str | None = None, head: float = 1.6, curve: float = 0,
