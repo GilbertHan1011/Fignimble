@@ -209,13 +209,21 @@ final class Inspector: NSView {
         section("Figure · \(f.name)")
         row([("W", numberField(Double(f.size.width)) { m.edit(["op": "figure", "props": ["width": $0]]) }),
              ("H", numberField(Double(f.size.height)) { m.edit(["op": "figure", "props": ["height": $0]]) }), ("mm", NSView())])
-        var sizes = ["Width for a journal…"]
-        var widths: [Double?] = [nil]
-        for (key, j) in m.journals.sorted(by: { $0.key < $1.key }) {
-            let ws = (j["widths"] as? [String: Any] ?? [:]).sorted { num($0.value) < num($1.value) }
-            for (n, w) in ws { sizes.append("\(j["name"] as? String ?? key): \(n) (\(mm(num(w))) mm)"); widths.append(num(w)) }
+        // a journal's widths, the journals by publisher
+        let widthMenu = NSPopUpButton(frame: .zero, pullsDown: true)
+        widthMenu.controlSize = .small; widthMenu.font = Theme.font(11)
+        widthMenu.addItem(withTitle: "Width for a journal…")
+        let pick = action { s in if let w = (s as? NSMenuItem)?.representedObject as? Double { m.edit(["op": "figure", "props": ["width": w]]) } }
+        if let menu = widthMenu.menu {
+            m.fillJournalMenu(menu) { k in
+                (m.journals[k]?["widths"] as? [String: Any] ?? [:]).sorted { num($0.value) < num($1.value) }.map { n, w in
+                    let it = NSMenuItem(title: "\(m.journalName(k)): \(n) (\(mm(num(w))) mm)", action: #selector(Action.fire(_:)), keyEquivalent: "")
+                    it.target = pick; it.representedObject = num(w); return it
+                }
+            }
         }
-        add(popup(sizes, nil, width: 220) { i, _ in if let w = widths[i] { m.edit(["op": "figure", "props": ["width": w]]) } })
+        widthMenu.widthAnchor.constraint(equalToConstant: 220).isActive = true
+        add(widthMenu)
         add(check("Transparent background", f.background == nil) { on in m.edit(["op": "figure", "props": ["background": on ? (NSNull() as Any) : "#FFFFFF"]]) })
 
         section("Style (every panel)")

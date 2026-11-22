@@ -1081,6 +1081,10 @@ class Renderer:
         if fmt in ("tif", "tiff", "jpg", "jpeg") and used < need[kind]:
             notes.append(f"{used} dpi raised to {need[kind]} dpi: {self._jname(journal)} that of {kind} figures")
             used = need[kind]
+        top = journals.JOURNALS.get((journal or "").lower(), {}).get("max_dpi")
+        if top and fmt in ("tif", "tiff", "jpg", "jpeg", "png") and used > top:
+            notes.append(f"{used} dpi is more than the {top} dpi {journals.JOURNALS[journal.lower()]['name']} takes "
+                         "without resizing the figure")
         if fmt in ("pdf", "eps") and used != 600:
             # panels' rasters at the resolution asked (never below the photo dpi): drawn again for this export
             if used < need["photo"]:

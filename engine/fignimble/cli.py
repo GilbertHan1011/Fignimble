@@ -41,7 +41,7 @@ def main(argv=None):
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("new", help="make a new project")
     p.add_argument("folder")
-    p.add_argument("--journal", default="nature", help="nature, science, cell, pnas, elife, or none")
+    p.add_argument("--journal", default="nature", help="a journal key from `fignimble journals` (nature, cell, bioinformatics, plos-computational-biology, ...), or none")
     p = sub.add_parser("snapshot", help="render a figure to PNG and print where")
     p.add_argument("figure")
     p.add_argument("--dpi", type=int, default=150)
@@ -76,13 +76,20 @@ def main(argv=None):
         return 0
     if a.cmd == "journals":
         from .journals import JOURNALS
+        checked = {"guidelines": "checked against its guidelines", "secondary": "from summaries of its guidelines",
+                   "publisher": "the publisher's usual values, not checked"}
+        publisher = None
         for k, j in JOURNALS.items():
-            ws = ", ".join(f"{n} {w} mm" for n, w in j["widths"].items())
+            if j["publisher"] != publisher:
+                publisher = j["publisher"]
+                print(f"\n{publisher}")
+            ws = ", ".join(f"{n} {w:g} mm" for n, w in j["widths"].items())
             lab = j["labels"]
             d = j["dpi"]
-            print(f"{k:8} {j['name']:12} {ws}; {j['font']} {j['font_size']} pt (min {j['min_font']}); labels "
+            print(f"  {k:34} {j['name']}: {ws}; {j['font']} {j['font_size']} pt (min {j['min_font']}); labels "
                   f"{lab['weight']} {lab['case']}case {lab['size']} pt; {d['photo']}/{d['combination']}/{d['line']} dpi "
-                  "(photo/combination/line art)")
+                  f"(photo/combination/line art); {checked.get(j.get('checked'), '')}")
+        print("\nJournals revise their rules: check before submitting (fignimble/journals.py has the sources).")
         return 0
     if a.cmd == "snapshot":
         fig = Path(a.figure)

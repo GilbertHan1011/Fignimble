@@ -147,7 +147,14 @@ The app itself follows the system's light or dark appearance, or **View ▸ Appe
   plots made at different times match. `Style.journal("nature")` sets the journal's font, sizes and label convention.
 - **Preflight.** Every render checks what a production office would: text below the minimum size (inside panels too),
   pictures below 300 dpi at their printed size, Type 3 fonts, elements outside the figure, duplicate labels, and
-  whether the width matches the journal's columns (Nature, Science, Cell, PNAS, eLife).
+  whether the width matches the journal's columns.
+- **40 journals**, computational biology's especially: the Nature Portfolio (Nature Methods, Nature
+  Communications, Scientific Reports…), Cell Press (Cell Systems, Cell Genomics, Patterns…), PLOS (Computational
+  Biology, ONE…), Oxford (Bioinformatics, NAR, Briefings in Bioinformatics, GigaScience…), BMC (Genome Biology, BMC
+  Bioinformatics…), Genome Research, Molecular Systems Biology, eLife, Frontiers, IEEE/ACM TCBB, Science, PNAS. Each
+  sets the figure widths, font sizes, panel label style and resolutions; `fignimble journals` lists them, with where
+  each number comes from (the journal's guidelines, summaries of them, or the publisher's usual values). Check the
+  journal's current guidelines before submitting.
 - **Exports that meet journals' resolution rules**: vector PDF, EPS and SVG with real, editable TrueType text; TIFF
   (LZW), JPEG and PNG at any resolution (300 to 2400 offered; for PDF and EPS it is that of what panels draw as
   pixels, such as heatmaps). Export (⌘E) asks which journal (the style's by default): a TIFF or JPEG

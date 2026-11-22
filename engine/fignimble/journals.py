@@ -1,63 +1,131 @@
-"""Figure sizes, label conventions and resolutions of some journals.
+"""Figure sizes, label conventions and resolutions of journals, the computational biology ones especially.
 
 Widths are in millimetres. `dpi` is the least resolution, as printed, asked of raster figures and of the pictures
 inside vector ones: "photo" for photographs and micrographs alone (halftones), "combination" for pictures with text
-or line art, "line" for line art alone (plots, diagrams, text). Widths and fonts follow the journals' author
-guidelines as of 2026; the resolutions are the usual production values (300/600/1200, Cell Press 300/500/1000).
-Check the current guidelines before submitting, since journals revise them.
+or line art, "line" for line art alone (plots, diagrams, text). Export never goes below them.
+
+`checked` says where the numbers come from: "guidelines" (the journal's own author guidelines, November 2026),
+"secondary" (summaries of them; the journal's site refused automated reading), or "publisher" (the publisher's
+usual values, not checked for this journal). Journals revise their rules: check before submitting, and correct an
+entry here when it is wrong.
 """
-
-JOURNALS = {
-    "nature": {
-        "name": "Nature",
-        "dpi": {"photo": 300, "combination": 600, "line": 1200},
-        "widths": {"single": 89, "double": 183},
-        "font": "Arial",
-        "font_size": 7,
-        "min_font": 5,
-        "labels": {"case": "lower", "weight": "bold", "size": 8, "format": "{}"},
-    },
-    "science": {
-        "name": "Science",
-        "dpi": {"photo": 300, "combination": 600, "line": 1200},
-        "widths": {"single": 57, "double": 121, "triple": 184},
-        "font": "Helvetica",
-        "font_size": 7,
-        "min_font": 5,
-        "labels": {"case": "upper", "weight": "bold", "size": 9, "format": "{}"},
-    },
-    "cell": {
-        "name": "Cell Press",
-        "dpi": {"photo": 300, "combination": 500, "line": 1000},
-        "widths": {"single": 85, "one-and-a-half": 114, "double": 174},
-        "font": "Arial",
-        "font_size": 7,
-        "min_font": 6,
-        "labels": {"case": "upper", "weight": "bold", "size": 9, "format": "{}"},
-    },
-    "pnas": {
-        "name": "PNAS",
-        "dpi": {"photo": 300, "combination": 600, "line": 1200},
-        "widths": {"single": 87, "one-and-a-half": 114, "double": 178},
-        "font": "Arial",
-        "font_size": 7,
-        "min_font": 6,
-        "labels": {"case": "upper", "weight": "bold", "size": 9, "format": "{}"},
-    },
-    "elife": {
-        "name": "eLife",
-        "dpi": {"photo": 300, "combination": 600, "line": 1200},
-        "widths": {"single": 85, "double": 178},
-        "font": "Arial",
-        "font_size": 7,
-        "min_font": 6,
-        "labels": {"case": "upper", "weight": "bold", "size": 9, "format": "{}"},
-    },
-}
-
 
 # what most journals ask when no journal is named (and the usual production standard)
 DEFAULT_DPI = {"photo": 300, "combination": 600, "line": 1200}
+
+_NATURE = {"font": "Arial", "font_size": 7, "min_font": 5, "dpi": {"photo": 300, "combination": 600, "line": 1200},
+           "labels": {"case": "lower", "weight": "bold", "size": 8, "format": "{}"}}
+_CELL = {"publisher": "Cell Press", "widths": {"single": 85, "one-and-a-half": 114, "double": 174}, "font": "Arial",
+         "font_size": 7, "min_font": 6, "dpi": {"photo": 300, "combination": 500, "line": 1000},
+         "labels": {"case": "upper", "weight": "bold", "size": 9, "format": "{}"}, "checked": "secondary",
+         "source": "https://www.cell.com/figureguidelines"}
+_PLOS = {"publisher": "PLOS", "widths": {"column": 132, "full": 190}, "font": "Arial", "font_size": 8, "min_font": 8,
+         # 300-600 dpi; PLOS resizes figures above 600 dpi, so line art stays at 600
+         "dpi": {"photo": 300, "combination": 600, "line": 600}, "max_dpi": 600,
+         "labels": {"case": "upper", "weight": "bold", "size": 10, "format": "{}"}, "checked": "guidelines",
+         "note": "TIFF or EPS only; Arial, Times or Symbol at 8-12 pt; 6.68-19.05 cm wide, at most 22.23 cm high"}
+_OUP = {"publisher": "Oxford University Press", "widths": {"single": 86, "double": 178}, "font": "Arial",
+        "font_size": 7, "min_font": 6, "dpi": {"photo": 300, "combination": 600, "line": 1200},
+        "labels": {"case": "upper", "weight": "bold", "size": 9, "format": "{}"}, "checked": "publisher"}
+_BMC = {"publisher": "BMC (Springer Nature)", "widths": {"single": 85, "double": 170}, "font": "Arial", "font_size": 7,
+        "min_font": 6, "dpi": {"photo": 300, "combination": 600, "line": 1200},
+        "labels": {"case": "lower", "weight": "bold", "size": 8, "format": "{}"}, "checked": "publisher",
+        "source": "https://www.biomedcentral.com/getpublished/writing-resources/data-presentation"}
+_AAAS = {"publisher": "AAAS", "widths": {"single": 57, "double": 121, "triple": 184}, "font": "Helvetica",
+         "font_size": 7, "min_font": 5, "dpi": {"photo": 300, "combination": 600, "line": 1200},
+         "labels": {"case": "upper", "weight": "bold", "size": 9, "format": "{}"}}
+
+
+def _j(base: dict, name: str, **kw) -> dict:
+    return {**base, "name": name, **kw}
+
+
+JOURNALS = {
+    # --- Nature Portfolio ---
+    "nature": _j(_NATURE, "Nature", publisher="Nature Portfolio", widths={"single": 89, "one-and-a-half": 120, "double": 183},
+                 checked="guidelines", source="https://www.nature.com/nature/for-authors/final-submission"),
+    "nature-methods": _j(_NATURE, "Nature Methods", publisher="Nature Portfolio", widths={"single": 89, "double": 183},
+                         checked="publisher", source="https://research-figure-guide.nature.com/figures/preparing-figures-our-specifications/"),
+    "nature-biotechnology": _j(_NATURE, "Nature Biotechnology", publisher="Nature Portfolio", widths={"single": 89, "double": 183},
+                               checked="publisher", source="https://research-figure-guide.nature.com/figures/preparing-figures-our-specifications/"),
+    "nature-genetics": _j(_NATURE, "Nature Genetics", publisher="Nature Portfolio", widths={"single": 89, "double": 183},
+                          checked="publisher", source="https://research-figure-guide.nature.com/figures/preparing-figures-our-specifications/"),
+    "nature-communications": _j(_NATURE, "Nature Communications", publisher="Nature Portfolio",
+                                widths={"single": 88, "double": 180}, checked="guidelines",
+                                labels={"case": "lower", "weight": "bold", "size": 7, "format": "{}"},
+                                source="https://www.nature.com/ncomms/submit/how-to-submit"),
+    "communications-biology": _j(_NATURE, "Communications Biology", publisher="Nature Portfolio",
+                                 widths={"single": 88, "double": 180}, checked="publisher",
+                                 labels={"case": "lower", "weight": "bold", "size": 7, "format": "{}"}),
+    "scientific-reports": _j(_NATURE, "Scientific Reports", publisher="Nature Portfolio",
+                             widths={"single": 88, "double": 180}, checked="publisher",
+                             labels={"case": "lower", "weight": "bold", "size": 7, "format": "{}"}),
+    # --- Cell Press ---
+    "cell": _j(_CELL, "Cell"),
+    "cell-systems": _j(_CELL, "Cell Systems"),
+    "cell-reports": _j(_CELL, "Cell Reports"),
+    "cell-genomics": _j(_CELL, "Cell Genomics"),
+    "patterns": _j(_CELL, "Patterns"),
+    "iscience": _j(_CELL, "iScience"),
+    # --- AAAS ---
+    "science": _j(_AAAS, "Science", checked="publisher"),
+    "science-advances": _j(_AAAS, "Science Advances", checked="publisher"),
+    # --- PNAS ---
+    "pnas": {"name": "PNAS", "publisher": "National Academy of Sciences", "widths": {"single": 87, "one-and-a-half": 114, "double": 178},
+             "font": "Arial", "font_size": 7, "min_font": 6, "dpi": {"photo": 300, "combination": 600, "line": 1200},
+             "labels": {"case": "upper", "weight": "bold", "size": 9, "format": "{}"}, "checked": "secondary",
+             "note": "8.7, 11.4 or 17.8 cm wide, at most 22.5 cm high"},
+    # --- PLOS ---
+    "plos-computational-biology": _j(_PLOS, "PLOS Computational Biology", source="https://journals.plos.org/ploscompbiol/s/figures"),
+    "plos-biology": _j(_PLOS, "PLOS Biology", source="https://journals.plos.org/plosbiology/s/figures"),
+    "plos-genetics": _j(_PLOS, "PLOS Genetics", source="https://journals.plos.org/plosgenetics/s/figures"),
+    "plos-one": _j(_PLOS, "PLOS ONE", source="https://journals.plos.org/plosone/s/figures"),
+    # --- Oxford University Press ---
+    "bioinformatics": _j(_OUP, "Bioinformatics", checked="secondary", dpi={"photo": 350, "combination": 600, "line": 1200},
+                         source="https://academic.oup.com/bioinformatics/pages/author-guidelines"),
+    "bioinformatics-advances": _j(_OUP, "Bioinformatics Advances"),
+    "briefings-in-bioinformatics": _j(_OUP, "Briefings in Bioinformatics"),
+    "nar": _j(_OUP, "Nucleic Acids Research", source="https://academic.oup.com/nar/pages/general_instructions"),
+    "nar-genomics-bioinformatics": _j(_OUP, "NAR Genomics and Bioinformatics"),
+    "gigascience": _j(_OUP, "GigaScience", source="https://academic.oup.com/gigascience/pages/instructions_to_authors"),
+    "mbe": _j(_OUP, "Molecular Biology and Evolution"),
+    "gbe": _j(_OUP, "Genome Biology and Evolution"),
+    # --- BMC ---
+    "genome-biology": _j(_BMC, "Genome Biology"),
+    "genome-medicine": _j(_BMC, "Genome Medicine"),
+    "bmc-bioinformatics": _j(_BMC, "BMC Bioinformatics"),
+    "bmc-genomics": _j(_BMC, "BMC Genomics"),
+    "bmc-biology": _j(_BMC, "BMC Biology"),
+    "algorithms-for-molecular-biology": _j(_BMC, "Algorithms for Molecular Biology"),
+    "microbiome": _j(_BMC, "Microbiome"),
+    # --- others ---
+    "genome-research": {"name": "Genome Research", "publisher": "Cold Spring Harbor Laboratory Press",
+                        "widths": {"single": 85, "double": 178}, "font": "Arial", "font_size": 7, "min_font": 6,
+                        # 300 for halftones and 600-900 for combinations are the journal's; line art as at its sister journals
+                        "dpi": {"photo": 300, "combination": 600, "line": 1200},
+                        "labels": {"case": "upper", "weight": "bold", "size": 9, "format": "{}"}, "checked": "secondary",
+                        "source": "https://genome.cshlp.org/ifora_digartsubm"},
+    "msb": {"name": "Molecular Systems Biology", "publisher": "EMBO Press", "widths": {"single": 85, "double": 174},
+            "font": "Arial", "font_size": 7, "min_font": 6, "dpi": {"photo": 300, "combination": 600, "line": 1200},
+            "labels": {"case": "upper", "weight": "bold", "size": 9, "format": "{}"}, "checked": "publisher"},
+    "elife": {"name": "eLife", "publisher": "eLife", "widths": {"at least": 100, "full page": 200}, "font": "Arial",
+              "font_size": 7, "min_font": 6, "dpi": {"photo": 300, "combination": 300, "line": 300},
+              "labels": {"case": "upper", "weight": "bold", "size": 9, "format": "{}"}, "checked": "guidelines",
+              "note": "at least 300 dpi, uploaded at least 10 cm wide (20 cm for a full-page figure)",
+              "source": "https://reviewer.elifesciences.org/author-guide/full"},
+    "frontiers": {"name": "Frontiers journals", "publisher": "Frontiers", "widths": {"single": 85, "double": 180},
+                  "font": "Arial", "font_size": 8, "min_font": 6, "dpi": {"photo": 300, "combination": 300, "line": 300},
+                  "labels": {"case": "upper", "weight": "bold", "size": 9, "format": "({})"}, "checked": "guidelines",
+                  "source": "https://www.frontiersin.org/guidelines/author-guidelines"},
+    "ieee-tcbb": {"name": "IEEE/ACM TCBB", "publisher": "IEEE", "widths": {"single": 88.9, "double": 181.9},
+                  "font": "Times New Roman", "font_size": 8, "min_font": 8, "dpi": {"photo": 300, "combination": 600, "line": 600},
+                  "labels": {"case": "lower", "weight": "normal", "size": 8, "format": "({})"}, "checked": "guidelines",
+                  "note": "one column 3.5 in, two 7.16 in, at most 7.16 x 8.8 in",
+                  "source": "https://journals.ieeeauthorcenter.ieee.org/create-your-ieee-journal-article/create-graphics-for-your-article/resolution-and-size/"},
+}
+
+# the order journals are offered in: by publisher, as listed above
+PUBLISHERS = list(dict.fromkeys(j["publisher"] for j in JOURNALS.values()))
 
 
 def dpi(journal: str | None) -> dict:
@@ -67,10 +135,14 @@ def dpi(journal: str | None) -> dict:
 
 
 def width(journal: str, columns="double") -> float:
-    """The figure width (mm) of `journal` for `columns` ("single", "double", 1, 2, ...)."""
+    """The figure width (mm) of `journal` for `columns` ("single", "double", 1, 2, ...). A journal without that
+    name of width gives its narrowest for "single" and widest for "double"."""
     j = JOURNALS[journal.lower()]
     if isinstance(columns, int):
         columns = {1: "single", 2: "double", 3: "triple"}.get(columns, "double")
-    if columns not in j["widths"]:
-        raise ValueError(f"{j['name']} has no {columns!r} width; it has {', '.join(j['widths'])}")
-    return float(j["widths"][columns])
+    ws = j["widths"]
+    if columns in ws:
+        return float(ws[columns])
+    if columns in ("single", "double"):
+        return float((min if columns == "single" else max)(ws.values()))
+    raise ValueError(f"{j['name']} has no {columns!r} width; it has {', '.join(ws)}")

@@ -595,3 +595,16 @@ def test_undo_takes_away_files_made_for_an_insert(session, tmp_path):
     r = session.import_file({"figure": "fig1", "path": str(session.project / "images" / "cells.png"), "x": 5, "y": 5})
     session.undo({"figure": "fig1"})
     assert (session.project / "images" / "cells.png").exists()
+
+
+def test_journal_table_is_complete():
+    from fignimble import api, journals
+    assert len(journals.JOURNALS) >= 40
+    for k, j in journals.JOURNALS.items():
+        for field in ("name", "publisher", "widths", "font", "font_size", "min_font", "dpi", "labels", "checked"):
+            assert field in j, (k, field)
+        assert set(j["dpi"]) == {"photo", "combination", "line"}, k
+        assert j["dpi"]["photo"] <= j["dpi"]["combination"] <= j["dpi"]["line"], k
+        assert j["checked"] in ("guidelines", "secondary", "publisher"), k
+        assert 0 < journals.width(k, "single") <= journals.width(k, "double") <= 200, k
+        api.Style.journal(k)                         # every one makes a style

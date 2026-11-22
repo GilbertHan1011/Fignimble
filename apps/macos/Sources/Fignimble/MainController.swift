@@ -912,14 +912,19 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         p.message = "A new folder for the project's figures, panels and pictures"
         p.nameFieldStringValue = "figures"
         let journal = NSPopUpButton(frame: .zero, pullsDown: false)
-        let keys = [""] + journals.keys.sorted()
-        journal.addItems(withTitles: ["No journal"] + journals.keys.sorted().map { journals[$0]?["name"] as? String ?? $0 })
-        if let i = keys.firstIndex(of: "nature") { journal.selectItem(at: i) }
+        journal.menu?.addItem(withTitle: "No journal", action: nil, keyEquivalent: "")
+        journal.menu?.addItem(.separator())
+        if let menu = journal.menu {
+            fillJournalMenu(menu) { k in
+                let it = NSMenuItem(title: journalName(k), action: nil, keyEquivalent: ""); it.representedObject = k; return [it]
+            }
+        }
+        if let i = journal.itemArray.firstIndex(where: { $0.representedObject as? String == "nature" }) { journal.selectItem(at: i) }
         let acc = NSStackView(views: [NSTextField(labelWithString: "Style for:"), journal]); acc.edgeInsets = NSEdgeInsets(top: 8, left: 8, bottom: 8, right: 8)
         p.accessoryView = acc
         p.beginSheetModal(for: window) { [weak self] r in
             guard let self, r == .OK, let u = p.url else { return }
-            let j = keys[journal.indexOfSelectedItem]
+            let j = journal.selectedItem?.representedObject as? String ?? ""
             Task { @MainActor in
                 do {
                     var a: [String: Any] = ["dir": u.path]
@@ -1049,11 +1054,18 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         dpi.widthAnchor.constraint(equalToConstant: 70).isActive = true
         let dpiValue = { () -> Int in max(72, min(4800, Int(dpi.stringValue.filter(\.isNumber)) ?? 600)) }
         // the journal whose resolutions the export meets: the style's, or another
-        let keys: [String?] = [nil, "nature", "science", "cell", "pnas", "elife"]
         let styleJournal = f.style["journal"] as? String
         let journal = NSPopUpButton(frame: .zero, pullsDown: false)
-        journal.addItems(withTitles: ["Usual standard"] + keys.dropFirst().map { (journals[$0!]?["name"] as? String) ?? $0! })
-        journal.selectItem(at: keys.firstIndex { $0 == styleJournal } ?? 0)
+        journal.menu?.addItem(withTitle: "Usual standard (300/600/1200 dpi)", action: nil, keyEquivalent: "")
+        journal.menu?.addItem(.separator())
+        if let menu = journal.menu {
+            fillJournalMenu(menu) { k in
+                let it = NSMenuItem(title: journalName(k), action: nil, keyEquivalent: ""); it.representedObject = k; return [it]
+            }
+        }
+        if let k = styleJournal, let i = journal.itemArray.firstIndex(where: { $0.representedObject as? String == k }) { journal.selectItem(at: i) }
+        else { journal.selectItem(at: 0) }
+        let key = { journal.selectedItem?.representedObject as? String }
         let note = NSTextField(wrappingLabelWithString: "")
         note.font = Theme.font(10.5); note.textColor = .secondaryLabelColor; note.preferredMaxLayoutWidth = 560
         // pictures make it a combination figure (the engine checks the pixels themselves)
@@ -1063,11 +1075,11 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         }
         let refresh = { (pickDPI: Bool) in
             let fmt = formats[format.indexOfSelectedItem]
-            let d = self.journalDPI(keys[journal.indexOfSelectedItem])
+            let d = self.journalDPI(key())
             let raster = ["tiff", "png", "jpg"].contains(fmt)
             if pickDPI { dpi.stringValue = "\(raster ? (pictures ? d.combination : d.line) : 600)" }
-            let who = journal.titleOfSelectedItem ?? ""
-            let need = "\(who): \(d.line) dpi for line art, \(d.combination) for figures with pictures, \(d.photo) for the pictures in a vector file."
+            let who = key().map { self.journalName($0) } ?? "The usual standard"
+            let need = "\(who): \(d.line) dpi for line art, \(d.combination) for figures with pictures, \(d.photo) for the pictures in a vector file." + (key().map { " " + self.journalChecked($0) } ?? "")
             note.stringValue = need + (raster
                 ? " This figure \(pictures ? "has pictures" : "is line art"): a lower setting is raised to \(pictures ? d.combination : d.line) dpi (except PNG)."
                 : " Vector stays sharp at any size; the resolution is that of what panels draw as pixels (heatmaps, dense scatters)\(fmt == "eps" ? " and of what EPS has to rasterize" : ""), at least \(d.photo) dpi; pictures placed from files keep their own pixels, and those below \(d.photo) dpi are reported.")
@@ -1099,7 +1111,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
             let fmt = formats[format.indexOfSelectedItem], d = dpiValue()
             let dark = darkBox.state == .on, cmyk = cmykBox.state == .on, outline = outlineBox.state == .on
             var args: [String: Any] = ["figure": name, "path": u.path, "format": fmt, "dpi": d, "dark": dark, "cmyk": cmyk, "outline": outline]
-            if let j = keys[journal.indexOfSelectedItem] { args["journal"] = j }
+            if let j = key() { args["journal"] = j }
             self.enqueue { [weak self] in guard let self else { return }
                 busy("Exporting…")
                 do {

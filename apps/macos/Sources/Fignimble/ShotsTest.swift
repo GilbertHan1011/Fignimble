@@ -20,6 +20,7 @@ extension MainController {
             if ProcessInfo.processInfo.environment["FIGNIMBLE_SHOTS_SCENE"] == "parts" { await partShots(dir); return }
             if ProcessInfo.processInfo.environment["FIGNIMBLE_SHOTS_SCENE"] == "more" { await moreShots(dir); return }
             if ProcessInfo.processInfo.environment["FIGNIMBLE_SHOTS_SCENE"] == "size" { await sizeShots(dir); return }
+            if ProcessInfo.processInfo.environment["FIGNIMBLE_SHOTS_SCENE"] == "journals" { await journalShots(dir); return }
             shot(dir, "01-figure")
             canvas.selection = ["1"]
             await settle(); shot(dir, "02-panel-selected")
@@ -310,6 +311,37 @@ extension MainController {
             for _ in 0..<100 where figure == nil { try? await Task.sleep(nanoseconds: 100_000_000) }
             await settle(); shot(dir, "B2-opened-recent")
             Engine.note("blank: opened \(project ?? "none") figure \(figure?.name ?? "none")")
+        }
+        NSApp.terminate(nil)
+    }
+
+    /// The journal menus: the export dialog with PLOS Computational Biology chosen, Journal Convention, figure widths.
+    private func journalShots(_ dir: String) async {
+        exportFigure(nil)
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+        if let sheet = window.attachedSheet, let acc = (sheet as? NSSavePanel)?.accessoryView,
+           let pop = acc.descendants(NSPopUpButton.self).first(where: { $0.itemArray.contains { $0.representedObject as? String == "plos-computational-biology" } }),
+           let i = pop.itemArray.firstIndex(where: { $0.representedObject as? String == "plos-computational-biology" }) {
+            Engine.note("journals: export menu \(pop.numberOfItems) items, \(pop.itemArray.filter { $0.representedObject != nil }.count) journals")
+            pop.selectItem(at: i)
+            if let a = pop.action { NSApp.sendAction(a, to: pop.target, from: pop) }
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            if let rep = acc.bitmapImageRepForCachingDisplay(in: acc.bounds) {
+                acc.cacheDisplay(in: acc.bounds, to: rep)
+                try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: dir).appendingPathComponent("J1-export-plos.png"))
+            }
+            Engine.note("journals: resolution for PLOS TIFF? " + (acc.descendants(NSComboBox.self).first?.stringValue ?? "-"))
+            window.endSheet(sheet)
+        } else { Engine.note("journals: no export menu") }
+        let labels = NSApp.mainMenu?.items.first { $0.title == "Labels" }?.submenu
+        if let jc = labels?.items.first(where: { $0.title == "Journal Convention" })?.submenu {
+            jc.delegate?.menuNeedsUpdate?(jc)
+            Engine.note("journals: Journal Convention \(jc.items.filter { $0.action != nil }.count) journals, headers \(jc.items.filter { !$0.isEnabled && !$0.isSeparatorItem }.map(\.title))")
+        }
+        canvas.selection = []
+        await settle()
+        if let w = inspector.descendants(NSPopUpButton.self).first(where: { $0.itemTitle(at: 0) == "Width for a journal…" }) {
+            Engine.note("journals: width menu \(w.itemArray.filter { $0.representedObject != nil }.count) widths")
         }
         NSApp.terminate(nil)
     }

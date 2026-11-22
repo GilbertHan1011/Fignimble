@@ -49,6 +49,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
+        if menu.title == "Journal Convention", let c = controller {
+            menu.removeAllItems()
+            c.fillJournalMenu(menu) { k in
+                let it = NSMenuItem(title: c.journalName(k), action: #selector(MainController.labelJournal(_:)), keyEquivalent: "")
+                it.representedObject = k; return [it]
+            }
+            return
+        }
         guard menu.title == "Open Recent" else { return }
         menu.removeAllItems()
         let recent = MainController.recentProjects
@@ -150,12 +158,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                         sep(), item("Make Layout", #selector(MainController.makeLayout(_:)), "l"),
                         item("Release Layout", #selector(MainController.releaseSelectedLayout(_:)), "l", [.command, .shift]),
                         sep(), item("Edit Code", #selector(MainController.editCode(_:)), "k")])
-        let journalItems: [NSMenuItem] = ["nature", "science", "cell", "pnas", "elife"].map { k in
-            let i = item(k == "cell" ? "Cell Press" : (k == "pnas" ? "PNAS" : (k == "elife" ? "eLife" : k.capitalized)), #selector(MainController.labelJournal(_:)))
-            i.representedObject = k; return i
-        }
+        // filled when it opens (menuNeedsUpdate), from the engine's journals
+        let journalConvention = NSMenuItem(title: "Journal Convention", action: nil, keyEquivalent: "")
+        journalConvention.submenu = NSMenu(title: "Journal Convention"); journalConvention.submenu?.delegate = self
         menu("Labels", Inspector.labelFormats.enumerated().map { i, f in item("Style  \(f.0)  \(f.0 == "a" ? "b c" : "…")".replacingOccurrences(of: "  …", with: ""), #selector(MainController.labelFormat(_:)), tag: i) }
-             + [item("No Letters", #selector(MainController.labelsNone(_:))), sep(), sub("Journal Convention", journalItems), sep(),
+             + [item("No Letters", #selector(MainController.labelsNone(_:))), sep(), journalConvention, sep(),
                 item("Labels Outside Panels (above left)", #selector(MainController.labelsOutside(_:))),
                 item("Labels at Panel Corners", #selector(MainController.labelsInside(_:))), sep(),
                 item("Line Up Labels in Rows and Columns", #selector(MainController.toggleLabelAlign(_:))),

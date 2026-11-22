@@ -75,7 +75,9 @@ def main():
         "new_figure": lambda a: need().new_figure(a),
         "new_panel": lambda a: need().new_panel(a),
         "import_file": lambda a: need().import_file(a),
-        "journals": lambda a: __import__("fignimble.journals", fromlist=["JOURNALS"]).JOURNALS,
+        # in their order (by publisher), which a JSON object doesn't keep for the app
+        "journals": lambda a: {k: {**j, "rank": i} for i, (k, j) in
+                               enumerate(__import__("fignimble.journals", fromlist=["JOURNALS"]).JOURNALS.items())},
     }
     pool = ThreadPoolExecutor(max_workers=6)
 

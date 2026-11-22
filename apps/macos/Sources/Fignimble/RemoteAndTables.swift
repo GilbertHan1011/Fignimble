@@ -285,3 +285,42 @@ extension MainController {
         toast("Installed: run fignimble in a new terminal window")
     }
 }
+
+// MARK: - journals, by publisher
+
+extension MainController {
+    /// The journals grouped by publisher, in the engine's order (fignimble/journals.py).
+    var journalGroups: [(publisher: String, keys: [String])] {
+        let keys = journals.keys.sorted { (journals[$0]?["rank"] as? Int ?? 0) < (journals[$1]?["rank"] as? Int ?? 0) }
+        var out: [(publisher: String, keys: [String])] = []
+        for k in keys {
+            let p = journals[k]?["publisher"] as? String ?? ""
+            if out.last?.publisher == p { out[out.count - 1].keys.append(k) } else { out.append((p, [k])) }
+        }
+        return out
+    }
+    func journalName(_ key: String) -> String { journals[key]?["name"] as? String ?? key }
+
+    /// A menu of journals: a header per publisher, its journals under it; `items` makes a journal's item(s), with
+    /// its key (or what they stand for) as representedObject.
+    func fillJournalMenu(_ menu: NSMenu, _ items: (String) -> [NSMenuItem]) {
+        for g in journalGroups {
+            if menu.numberOfItems > 0 { menu.addItem(.separator()) }
+            let h = NSMenuItem(title: g.publisher, action: nil, keyEquivalent: ""); h.isEnabled = false
+            menu.addItem(h)
+            for k in g.keys { for it in items(k) { it.indentationLevel = 1; menu.addItem(it) } }
+        }
+    }
+
+    /// Where a journal's numbers come from, for the export dialog.
+    func journalChecked(_ key: String) -> String {
+        guard let j = journals[key] else { return "" }
+        let how: String
+        switch j["checked"] as? String {
+        case "guidelines": how = "Checked against \(journalName(key))'s guidelines (November 2026)."
+        case "secondary": how = "From summaries of \(journalName(key))'s guidelines (its site couldn't be read): check them."
+        default: how = "\(j["publisher"] as? String ?? "The publisher")'s usual values, not checked for \(journalName(key)): check its guidelines."
+        }
+        return how + ((j["note"] as? String).map { " \($0.prefix(1).uppercased() + $0.dropFirst())." } ?? "")
+    }
+}
