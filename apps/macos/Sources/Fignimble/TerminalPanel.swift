@@ -76,6 +76,8 @@ final class TerminalPanel: NSView {
     }
 
     private var allSessions: [TerminalSession] { tabs.flatMap(\.sessions) }
+    /// The terminal last used (for the headless checks).
+    var activeSession: TerminalSession? { active ?? allSessions.first }
 
     /// Start the first shell, or restart every open shell in a new folder (another project was opened).
     func start(in dir: String, original o: String?) {
@@ -310,6 +312,12 @@ private extension NSSplitView {
 /// One shell. In a split tab the active one is marked by an accent line along its top.
 final class TerminalSession: NSView, LocalProcessTerminalViewDelegate {
     private let term = LocalProcessTerminalView(frame: .zero)
+    var terminalView: LocalProcessTerminalView { term }
+    /// What the terminal shows, line by line.
+    var screenText: String {
+        let t = term.getTerminal()
+        return (0..<t.rows).compactMap { t.getLine(row: $0)?.translateToString(trimRight: true) }.joined(separator: "\n")
+    }
     private let marker = NSView()
     private var started = false
     private(set) var shellTitle = ""

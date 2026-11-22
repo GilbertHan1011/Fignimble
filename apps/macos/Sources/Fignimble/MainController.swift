@@ -853,7 +853,11 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
 
     // MARK: undo
 
+    /// Typing in a terminal: Undo and Redo are the shell's business (⌘Z there never changes the figure).
+    private var inTerminal: Bool { (window.firstResponder as? NSView)?.isDescendant(of: terminal) ?? false }
+
     @objc func undoEdit(_ sender: Any?) {
+        if inTerminal { return }
         if let tv = window.firstResponder as? NSTextView, tv.isEditable { tv.undoManager?.undo(); return }
         guard let name = current ?? figures.first?["name"] as? String else { return }
         enqueue { [self] in
@@ -866,6 +870,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         }
     }
     @objc func redoEdit(_ sender: Any?) {
+        if inTerminal { return }
         if let tv = window.firstResponder as? NSTextView, tv.isEditable { tv.undoManager?.redo(); return }
         guard let name = current else { return }
         enqueue { [self] in
@@ -1229,10 +1234,12 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         switch item.action {
         case #selector(undoEdit(_:)):
+            if inTerminal { item.title = "Undo"; return false }
             if let tv = window.firstResponder as? NSTextView, tv.isEditable { item.title = "Undo"; return tv.undoManager?.canUndo ?? false }
             item.title = (state["undoLabel"] as? String).map { "Undo \($0)" } ?? "Undo"
             return state["canUndo"] as? Bool ?? false
         case #selector(redoEdit(_:)):
+            if inTerminal { item.title = "Redo"; return false }
             if let tv = window.firstResponder as? NSTextView, tv.isEditable { item.title = "Redo"; return tv.undoManager?.canRedo ?? false }
             item.title = (state["redoLabel"] as? String).map { "Redo \($0)" } ?? "Redo"
             return state["canRedo"] as? Bool ?? false

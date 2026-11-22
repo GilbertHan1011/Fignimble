@@ -126,6 +126,8 @@ final class Navigator: NSView, NSTableViewDataSource, NSTableViewDelegate {
         let lock = LayerToggle(symbol: e.locked ? "lock.fill" : "lock.open", on: e.locked, tip: e.locked ? "Unlock" : "Lock (the canvas leaves it alone)") { [weak self] in
             self?.main?.setLayer(e.oid, locked: !e.locked) }
         let toggles = e.parentOid == nil
+        // as the cell's own text and image, so a selected row shows them light on the highlight like any list's
+        v.textField = t; v.imageView = icon
         for x in [icon, t, eye, lock] { x.translatesAutoresizingMaskIntoConstraints = false; v.addSubview(x) }
         eye.isHidden = !toggles; lock.isHidden = !toggles
         NSLayoutConstraint.activate([

@@ -230,7 +230,9 @@ open ~/Applications/Fignimble.app --args "$PWD/examples/demo"
 For development: `python3 -m venv .venv && .venv/bin/pip install -r engine/requirements.txt pytest`, then
 `apps/macos/build_app.sh` (the app finds the checkout's `.venv`) and `.venv/bin/python -m pytest tests`. Running the
 debug binary with `FIGNIMBLE_SHOTS=<folder>` walks through the editor on a project (give it a copy) and saves pictures of
-the window.
+the window; `FIGNIMBLE_SHOTS_SCENE=audit` checks Select All, Copy, Cut, Paste, Undo and Delete in the canvas, the code
+pane, the terminal, the inspector, the BioCartoon search and the SSH dialog, and copying between them ("audit PASS/FAIL"
+lines in ~/Library/Logs/fignimble.log).
 
 ## Layout
 

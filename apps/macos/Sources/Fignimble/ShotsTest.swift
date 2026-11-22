@@ -21,6 +21,7 @@ extension MainController {
             if ProcessInfo.processInfo.environment["FIGNIMBLE_SHOTS_SCENE"] == "more" { await moreShots(dir); return }
             if ProcessInfo.processInfo.environment["FIGNIMBLE_SHOTS_SCENE"] == "size" { await sizeShots(dir); return }
             if ProcessInfo.processInfo.environment["FIGNIMBLE_SHOTS_SCENE"] == "journals" { await journalShots(dir); return }
+            if ProcessInfo.processInfo.environment["FIGNIMBLE_SHOTS_SCENE"] == "audit" { await auditEditing(dir); return }
             shot(dir, "01-figure")
             canvas.selection = ["1"]
             await settle(); shot(dir, "02-panel-selected")
@@ -343,6 +344,187 @@ extension MainController {
         if let w = inspector.descendants(NSPopUpButton.self).first(where: { $0.itemTitle(at: 0) == "Width for a journal…" }) {
             Engine.note("journals: width menu \(w.itemArray.filter { $0.representedObject != nil }.count) widths")
         }
+        NSApp.terminate(nil)
+    }
+
+    /// Select All, Copy, Cut, Paste, Undo and Delete through the menu bar's shortcuts, with each place one types in
+    /// focused in turn: the canvas, the code pane, the terminal, an inspector field, the BioCartoon search, the SSH
+    /// dialog; and copying from one into another. Lines "audit PASS/FAIL ..." in the log.
+    private func auditEditing(_ dir: String) async {
+        var fails = 0
+        func check(_ what: String, _ ok: Bool, _ detail: String = "") {
+            if !ok { fails += 1 }
+            Engine.note("audit \(ok ? "PASS" : "FAIL") \(what)\(detail.isEmpty ? "" : ": " + detail)")
+        }
+        // what the menu bar does with a shortcut: its action to the first responder that takes it, up the chain to the
+        // window and its delegate (sent here directly, so it doesn't matter which app is in front while this runs)
+        let actions: [String: Selector] = ["a": #selector(NSResponder.selectAll(_:)), "c": #selector(NSText.copy(_:)),
+                                           "v": #selector(NSText.paste(_:)), "x": #selector(NSText.cut(_:)),
+                                           "z": #selector(MainController.undoEdit(_:)), "Z": #selector(MainController.redoEdit(_:)),
+                                           "d": #selector(MainController.duplicate(_:))]
+        func key(_ ch: String, _ mods: NSEvent.ModifierFlags = [.command], in win: NSWindow? = nil) {
+            let window = win ?? self.window
+            if ch == "\u{1b}" {
+                if let e = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                            windowNumber: window.windowNumber, context: nil, characters: ch, charactersIgnoringModifiers: ch,
+                                            isARepeat: false, keyCode: 53) { window.firstResponder?.keyDown(with: e) }
+                return
+            }
+            guard let sel = actions[mods.contains(.shift) ? ch.uppercased() : ch] else { return }
+            var r: NSResponder? = window.firstResponder
+            while let x = r, !x.responds(to: sel) { r = x.nextResponder }
+            if let x = r { _ = x.perform(sel, with: nil) }
+            else if window.responds(to: sel) { window.perform(sel, with: nil) }
+            else if let d = window.delegate as? NSObject, d.responds(to: sel) { d.perform(sel, with: nil) }
+        }
+        func pbString() -> String { NSPasteboard.general.string(forType: .string) ?? "" }
+        func setPB(_ s: String) { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(s, forType: .string) }
+        func enabled(_ title: String) -> Bool {
+            guard let item = NSApp.mainMenu?.items.first(where: { $0.title == "Edit" })?.submenu?.items.first(where: { $0.title.hasPrefix(title) }),
+                  let sel = item.action else { return false }
+            var r: NSResponder? = window.firstResponder
+            while let x = r, !x.responds(to: sel) { r = x.nextResponder }
+            let target: AnyObject? = r ?? (window.delegate as AnyObject?)
+            return (target as? NSMenuItemValidation)?.validateMenuItem(item) ?? (target != nil)
+        }
+        // the shortcuts themselves
+        let edit = NSApp.mainMenu?.items.first { $0.title == "Edit" }?.submenu
+        let shortcuts = (edit?.items ?? []).filter { !$0.keyEquivalent.isEmpty }.map { i -> String in
+            let m = i.keyEquivalentModifierMask
+            return "\(m.contains(.option) ? "⌥" : "")\(m.contains(.shift) ? "⇧" : "")\(m.contains(.command) ? "⌘" : "")\(i.keyEquivalent.uppercased()) \(i.title)"
+        }
+        for want in ["⌘Z Undo", "⇧⌘Z Redo", "⌘X Cut", "⌘C Copy", "⌘V Paste", "⌘A Select All", "⌘D Duplicate"] {
+            check("Edit menu has \(want)", shortcuts.contains { $0.hasPrefix(want) })
+        }
+        let allKeys = (NSApp.mainMenu?.items ?? []).flatMap { m -> [String] in
+            func walk(_ menu: NSMenu?) -> [String] {
+                (menu?.items ?? []).flatMap { i in i.submenu != nil ? walk(i.submenu) :
+                    (i.keyEquivalent.isEmpty ? [] : ["\(i.keyEquivalentModifierMask.rawValue)-\(i.keyEquivalent)"]) }
+            }
+            return walk(m.submenu)
+        }
+        let clashes = Dictionary(grouping: allKeys, by: { $0 }).filter { $0.value.count > 1 }.map(\.key)
+        check("no two menu items share a shortcut", clashes.isEmpty, clashes.joined(separator: ", "))
+        NSApp.activate(ignoringOtherApps: true); window.makeKeyAndOrderFront(nil)
+        await settle()
+
+        // --- the canvas ---
+        window.makeFirstResponder(canvas); canvas.selection = []
+        let top = figure?.elements.filter { $0.parentOid == nil && !$0.hidden && !$0.locked } ?? []
+        check("canvas, nothing selected: Copy enabled (copies the figure), Cut and Delete not", enabled("Copy") && !enabled("Cut") && !enabled("Delete"))
+        key("a")
+        check("canvas ⌘A selects every element", Set(canvas.selection) == Set(top.map(\.oid)), "\(canvas.selection.count) of \(top.count)")
+        let all = figure?.elements ?? []
+        check("⌘A leaves out locked, hidden and layout parts", !canvas.selection.contains { oid in all.first { $0.oid == oid }.map { $0.locked || $0.hidden || $0.parentOid != nil } ?? false })
+        canvas.selection = [top.first { $0.kind == "text" }?.oid ?? top[0].oid]
+        key("c"); await settle()
+        check("canvas ⌘C puts the element's code on the clipboard", pbString().contains("fig."), String(pbString().prefix(60)))
+        let n0 = figure?.elements.count ?? 0
+        window.makeFirstResponder(canvas); key("v"); await settle()
+        check("canvas ⌘V pastes it", (figure?.elements.count ?? 0) == n0 + 1, "\(n0) -> \(figure?.elements.count ?? 0)")
+        window.makeFirstResponder(canvas); key("z"); await settle()
+        check("⌘Z undoes the paste", (figure?.elements.count ?? 0) == n0)
+        window.makeFirstResponder(canvas); key("z", [.command, .shift]); await settle()
+        check("⇧⌘Z redoes it", (figure?.elements.count ?? 0) == n0 + 1)
+        if let last = figure?.elements.last { canvas.selection = [last.oid] }
+        window.makeFirstResponder(canvas); key("x"); await settle()
+        check("canvas ⌘X cuts it (code on the clipboard, element gone)", (figure?.elements.count ?? 0) == n0 && pbString().contains("fig."))
+        canvas.selection = [top[0].oid]
+        window.makeFirstResponder(canvas); key("\u{1b}", [])
+        check("Esc deselects", canvas.selection.isEmpty)
+        window.makeFirstResponder(canvas); key("d"); await settle()
+        check("⌘D with nothing selected does nothing", (figure?.elements.count ?? 0) == n0)
+        canvas.selection = [top[0].oid]; window.makeFirstResponder(canvas); key("d"); await settle()
+        check("⌘D duplicates", (figure?.elements.count ?? 0) == n0 + 1)
+        window.makeFirstResponder(canvas); key("z"); await settle()
+
+        // --- the code pane ---
+        showCodePane(nil); await settle()
+        if let tv = code.textView {
+            window.makeFirstResponder(tv)
+            let text = tv.string
+            key("a")
+            check("code pane ⌘A selects all its text", tv.selectedRange() == NSRange(location: 0, length: (text as NSString).length))
+            key("c")
+            check("code pane ⌘C copies it", pbString() == text)
+            tv.setSelectedRange(NSRange(location: 0, length: 0))
+            setPB("# pasted by the audit\n")
+            key("v")
+            check("code pane ⌘V pastes", tv.string.hasPrefix("# pasted by the audit"))
+            key("z")
+            check("code pane ⌘Z undoes the typing, not a figure edit", tv.string == text, "")
+            check("code pane: nothing left unsaved", !code.dirty)
+        } else { check("code pane exists", false) }
+
+        // --- an inspector field ---
+        canvas.selection = []; await settle()
+        if let field = inspector.descendants(Field.self).first(where: { !$0.stringValue.isEmpty }) {
+            window.makeFirstResponder(field)
+            key("a")
+            let ed = field.currentEditor() as? NSTextView
+            check("inspector field ⌘A selects its text", ed?.selectedRange().length == (field.stringValue as NSString).length, field.stringValue)
+            key("c")
+            check("inspector field ⌘C copies it", pbString() == field.stringValue)
+            window.makeFirstResponder(canvas)
+        } else { check("inspector field found", false) }
+
+        // --- the terminal ---
+        showTerminal(nil)
+        try? await Task.sleep(nanoseconds: 3_000_000_000)
+        if let s = terminal.activeSession {
+            window.makeFirstResponder(s.terminalView)
+            setPB("echo FIGNIMBLE_AUDIT_$((40+2))")
+            key("v")
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            check("terminal ⌘V pastes text", s.screenText.contains("echo FIGNIMBLE_AUDIT_$((40+2))"))
+            s.terminalView.send(txt: "\r")
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            check("the pasted command runs", s.screenText.contains("FIGNIMBLE_AUDIT_42"))
+            key("a"); key("c")
+            check("terminal ⌘A, ⌘C copies what it shows", pbString().contains("FIGNIMBLE_AUDIT_42"))
+            // from the canvas into the terminal: an element's code
+            canvas.selection = [top[0].oid]; window.makeFirstResponder(canvas); key("c"); await settle()
+            let code1 = pbString().components(separatedBy: "\n").first ?? ""
+            window.makeFirstResponder(s.terminalView)
+            s.terminalView.send(txt: "# ")
+            key("v")
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            check("canvas ⌘C, terminal ⌘V: the element's code in the terminal", !code1.isEmpty && s.screenText.contains(String(code1.prefix(30))), String(code1.prefix(40)))
+            s.terminalView.send(data: [0x15])            // ^U: drop the line, run nothing
+            let before = figure?.elements.count ?? 0
+            key("z")
+            await settle()
+            check("⌘Z in the terminal leaves the figure alone", (figure?.elements.count ?? 0) == before)
+            window.makeFirstResponder(canvas)
+        } else { check("terminal started", false) }
+
+        // --- the BioCartoon search ---
+        showBioCartoon(nil); try? await Task.sleep(nanoseconds: 1_500_000_000)
+        if let search = biocartoonPane?.view.descendants(NSSearchField.self).first {
+            window.makeFirstResponder(search)
+            setPB("ribosome")
+            key("a"); key("v")
+            check("BioCartoon search ⌘V pastes", search.stringValue == "ribosome", search.stringValue)
+            key("a"); key("c")
+            check("BioCartoon search ⌘A, ⌘C copies", pbString() == "ribosome")
+        } else { check("BioCartoon search field found", false) }
+        hideBioCartoon()
+
+        // --- the SSH dialog ---
+        let d = RemoteDialog(main: self); d.begin()
+        try? await Task.sleep(nanoseconds: 500_000_000)
+        if let host = d.panel.contentView?.firstDescendant(NSComboBox.self) {
+            d.panel.makeFirstResponder(host)
+            setPB("me@cluster.example.org")
+            key("a", in: d.panel); key("v", in: d.panel)
+            check("SSH dialog ⌘V pastes into the server field", host.stringValue == "me@cluster.example.org", host.stringValue)
+        } else { check("SSH dialog server field", false) }
+        window.attachedSheet.map { window.endSheet($0) }
+
+        // --- Copy Figure, with nothing selected ---
+        canvas.selection = []; window.makeFirstResponder(canvas); key("c"); await settle()
+        check("⌘C with nothing selected: the figure as PDF and PNG", NSPasteboard.general.data(forType: .pdf) != nil && NSPasteboard.general.data(forType: .png) != nil)
+        Engine.note("audit done: \(fails) failed")
         NSApp.terminate(nil)
     }
 
