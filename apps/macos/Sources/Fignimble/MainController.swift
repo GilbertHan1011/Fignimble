@@ -1067,7 +1067,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         else { journal.selectItem(at: 0) }
         let key = { journal.selectedItem?.representedObject as? String }
         let note = NSTextField(wrappingLabelWithString: "")
-        note.font = Theme.font(10.5); note.textColor = .secondaryLabelColor; note.preferredMaxLayoutWidth = 560
+        note.font = Theme.font(10.5); note.textColor = .secondaryLabelColor; note.preferredMaxLayoutWidth = 520
         // pictures make it a combination figure (the engine checks the pixels themselves)
         let pictures = f.elements.contains { e in
             let src = (e.kind == "inset" ? e.item["source"] : e.props["source"]) as? String ?? ""
@@ -1097,9 +1097,11 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         let darkBox = NSButton(checkboxWithTitle: "Dark version", target: nil, action: nil)
         darkBox.state = darkPreview ? .on : .off
         darkBox.toolTip = "White text and lines on black, for slides"
-        let top = NSStackView(views: [NSTextField(labelWithString: "Format:"), format, NSTextField(labelWithString: "For:"), journal,
-                                      NSTextField(labelWithString: "Resolution:"), dpi, NSTextField(labelWithString: "dpi")])
-        let boxes = NSStackView(views: [cmykBox, outlineBox, darkBox])
+        // two rows, so the options fit the save panel's width whatever the journal's name
+        journal.widthAnchor.constraint(lessThanOrEqualToConstant: 260).isActive = true
+        let top = NSStackView(views: [NSTextField(labelWithString: "Format:"), format, NSTextField(labelWithString: "For:"), journal])
+        let boxes = NSStackView(views: [NSTextField(labelWithString: "Resolution:"), dpi, NSTextField(labelWithString: "dpi"),
+                                        NSView(), cmykBox, outlineBox, darkBox])
         let acc = NSStackView(views: [top, boxes, note]); acc.orientation = .vertical; acc.alignment = .leading
         acc.edgeInsets = NSEdgeInsets(top: 8, left: 8, bottom: 8, right: 8)
         p.accessoryView = acc
