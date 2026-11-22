@@ -304,6 +304,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
             window.representedURL = dir
             current = nil; figure = nil
             canvas.selection = []
+            code.clear()
             await refreshState()
             if terminal.hasStarted { terminal.start(in: dir.path, original: nil) }
             let name = fig ?? (figures.first?["name"] as? String)

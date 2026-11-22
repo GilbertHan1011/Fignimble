@@ -22,6 +22,7 @@ extension MainController {
             if ProcessInfo.processInfo.environment["FIGNIMBLE_SHOTS_SCENE"] == "size" { await sizeShots(dir); return }
             if ProcessInfo.processInfo.environment["FIGNIMBLE_SHOTS_SCENE"] == "journals" { await journalShots(dir); return }
             if ProcessInfo.processInfo.environment["FIGNIMBLE_SHOTS_SCENE"] == "audit" { await auditEditing(dir); return }
+            if ProcessInfo.processInfo.environment["FIGNIMBLE_SHOTS_SCENE"] == "fresh" { await freshShots(dir); return }
             shot(dir, "01-figure")
             canvas.selection = ["1"]
             await settle(); shot(dir, "02-panel-selected")
@@ -525,6 +526,29 @@ extension MainController {
         canvas.selection = []; window.makeFirstResponder(canvas); key("c"); await settle()
         check("⌘C with nothing selected: the figure as PDF and PNG", NSPasteboard.general.data(forType: .pdf) != nil && NSPasteboard.general.data(forType: .png) != nil)
         Engine.note("audit done: \(fails) failed")
+        NSApp.terminate(nil)
+    }
+
+    /// From a project with its code showing to a new project, and to an empty folder: nothing of the first is left.
+    private func freshShots(_ dir: String) async {
+        func report(_ what: String) {
+            let first = code.textView.string.split(separator: "\n").prefix(3).joined(separator: " | ")
+            Engine.note("fresh \(what): project \(project ?? "-") figure \(figure?.file ?? "-") elements \(figure?.elements.count ?? -1) "
+                        + "code \(code.path ?? "-") text [\(first)] selection \(canvas.selection) figures \(figures.count)")
+        }
+        showCodePane(nil)
+        canvas.selection = ["1"]; await settle()
+        report("demo"); shot(dir, "fresh-1-demo")
+        for (name, template) in [("new", true), ("empty", false)] {
+            let d = dir + "/" + name
+            try? FileManager.default.removeItem(atPath: d)
+            if template { _ = try? await engine.json("new_project", ["dir": d, "journal": "nature"]) }
+            else { try? FileManager.default.createDirectory(atPath: d, withIntermediateDirectories: true) }
+            openProject(at: URL(fileURLWithPath: d))
+            for _ in 0..<100 where project != d { try? await Task.sleep(nanoseconds: 100_000_000) }
+            await settle(); await settle()
+            report(name); shot(dir, "fresh-\(name)")
+        }
         NSApp.terminate(nil)
     }
 

@@ -88,6 +88,16 @@ final class CodePane: NSView, NSTextViewDelegate {
         if let c = cur, let i = list.firstIndex(of: c) { files.selectItem(at: i) }
     }
 
+    /// Another project is opening: show nothing of this one (its file, its edits, their undo) until a file of the new
+    /// one is opened.
+    func clear() {
+        path = nil; loaded = ""; loadedDate = nil; placedBy = nil
+        textView.string = ""
+        textView.undoManager?.removeAllActions()
+        files.removeAllItems()
+        updateStatus(); updateHeader()
+    }
+
     private func relative(_ p: String) -> String {
         guard let root = main?.project else { return (p as NSString).lastPathComponent }
         return p.hasPrefix(root + "/") ? String(p.dropFirst(root.count + 1)) : (p as NSString).lastPathComponent

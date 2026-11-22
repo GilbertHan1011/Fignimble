@@ -1,6 +1,6 @@
 """The fignimble command: render, check and export figures from a terminal (and let a coding agent see its work).
 
-    fignimble new myproject [--journal nature]     a new project: style.py, fig1.py, panels/example.py
+    fignimble new myproject [--journal nature]     a new project: style.py and an empty fig1.py
     fignimble snapshot fig1.py [--dpi 150]         render to .fignimble/snapshots/fig1.png and print the path
     fignimble info fig1.py [--json]                elements, boxes (mm), labels and preflight warnings
     fignimble check [fig1.py ...]                  preflight warnings of every figure; exit status 1 if any
@@ -72,7 +72,7 @@ def main(argv=None):
     if a.cmd == "new":
         from .templates import new_project
         r = new_project(a.folder, None if a.journal == "none" else a.journal)
-        print(f"made {r['project']} (fig1.py, style.py, panels/example.py)")
+        print(f"made {r['project']} (style.py and an empty fig1.py)")
         return 0
     if a.cmd == "journals":
         from .journals import JOURNALS

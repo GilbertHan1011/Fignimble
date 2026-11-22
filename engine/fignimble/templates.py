@@ -24,21 +24,15 @@ STYLE = Style(font="Arial", size=7, linewidth=0.6, labels=Labels(format="{}", ca
 '''
 
 
-def figure_py(width: float, height: float, with_example: bool = False) -> str:
-    body = ""
-    if with_example:
-        # two panels side by side, 4 mm from the edges and from each other, whatever the width
-        w = round((width - 12) / 2, 1)
-        body = (f'\nfig.panel("panels/example.py", x=4, y=3, w={w:g}, h=60)\n'
-                f'fig.panel("panels/example.py", x={8 + w:g}, y=3, w={w:g}, h=60, args={{"kind": "bars"}})\n')
+def figure_py(width: float, height: float) -> str:
     return f'''from fignimble import *
 from style import STYLE
 
 fig = Figure(width={width:g}, height={height:g}, style=STYLE)
-{body}'''
+'''
 
 
-def panel_py(name: str = "example") -> str:
+def panel_py(name: str = "panel") -> str:
     return '''"""A panel: draw(fig) gets a matplotlib Figure exactly the panel's size. Fonts, text sizes and line widths come
 from the project's style, so leave them out here and every panel will match."""
 import numpy as np
@@ -60,7 +54,7 @@ def draw(fig, kind="lines"):
 
 
 def new_project(folder: str, journal: str | None = "nature") -> dict:
-    """A new project folder with a style, a first figure and an example panel."""
+    """A new project folder with a style and a first figure, empty: no panels, nothing from another project."""
     d = Path(folder)
     if d.exists() and any(p for p in d.iterdir() if not p.name.startswith(".")):
         raise FileExistsError(f"{d} is not empty")
@@ -68,8 +62,7 @@ def new_project(folder: str, journal: str | None = "nature") -> dict:
     (d / "images").mkdir(exist_ok=True)
     width = journals.width(journal, "double") if journal else 183
     (d / "style.py").write_text(style_py(journal), encoding="utf-8")
-    (d / "fig1.py").write_text(figure_py(width, 100, with_example=True), encoding="utf-8")
-    (d / "panels" / "example.py").write_text(panel_py(), encoding="utf-8")
+    (d / "fig1.py").write_text(figure_py(width, 100), encoding="utf-8")
     (d / ".gitignore").write_text(".fignimble/\n", encoding="utf-8")
     return {"ok": True, "project": str(d.resolve()), "figure": "fig1"}
 

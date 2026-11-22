@@ -608,3 +608,18 @@ def test_journal_table_is_complete():
         assert j["checked"] in ("guidelines", "secondary", "publisher"), k
         assert 0 < journals.width(k, "single") <= journals.width(k, "double") <= 200, k
         api.Style.journal(k)                         # every one makes a style
+
+
+def test_new_project_is_empty(tmp_path):
+    from fignimble import templates
+    d = tmp_path / "fresh"
+    templates.new_project(str(d), "nature")
+    assert sorted(p.name for p in (d / "panels").iterdir()) == []
+    s = Session(str(d), sys.executable)
+    try:
+        r = s.api_figure({"name": "fig1"})
+        assert not r.get("error"), r.get("error")
+        assert r["elements"] == [] and r["labels"] == []
+        assert s.api_state()["panels"] == []
+    finally:
+        s.close()
