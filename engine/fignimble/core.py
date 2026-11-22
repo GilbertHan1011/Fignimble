@@ -151,6 +151,7 @@ class Plan:
         self.sources: dict[str, Source] = {}
         self.patches: dict[str, list] = {}
         self.inserted: dict[str, list[int]] = {}       # file -> lines (after the edit) where new statements start
+        self.new_files: list[Path] = []                 # files made for this edit (a copied picture): undone with it
 
     def source(self, path: str) -> Source:
         if path not in self.sources:
@@ -454,9 +455,13 @@ class Session:
                 texts = plan.texts()
             except (EditError, KeyError, ValueError) as exc:
                 return {"ok": False, "error": str(exc).strip("'\"")}
+            made = [Path(p) for p in plan.new_files + list(a.get("_new_files") or [])]
             if not texts:
                 return {"ok": True, "unchanged": True, "figure": data}
             self._write(texts, label)
+            for p in made:                              # undo takes them away again, redo brings them back
+                if p.exists():
+                    self.history[-1]["files"][str(p)] = (None, p.read_bytes())
             # where the new statements are now, to select what they make
             lines = {}
             for path, ins in plan.inserted.items():
@@ -1267,12 +1272,12 @@ class Session:
         pic = self._picture_call(data, info)
         if pic["kind"] not in ("image", "inset") and info.get("kind") != "image":
             raise EditError("only a picture's file can be replaced")
-        rel = self._bring_in(Path(a["path"]))
+        rel = self._bring_in(Path(a["path"]), plan.new_files)
         self._set(plan, data, pic, {"source": str(rel)})
         return "Replace Picture"
 
-    def _bring_in(self, src: Path) -> Path:
-        """A file in the project: itself, or a copy in panels/ or images/."""
+    def _bring_in(self, src: Path, made: list | None = None) -> Path:
+        """A file in the project: itself, or a copy in panels/, tables/ or images/ (added to `made`)."""
         src = src.resolve()
         if not src.exists():
             raise EditError(f"no file {src}")
@@ -1288,6 +1293,8 @@ class Session:
             dest = dest_dir / f"{src.stem}-{n}{src.suffix}"
         if not dest.exists():
             shutil.copy2(src, dest)
+            if made is not None:
+                made.append(dest)
         return dest.relative_to(self.project)
 
     def _op_group(self, plan, data, a):
@@ -1546,7 +1553,7 @@ class Session:
             n += 1
         dest = self.project / "images" / f"pasted-{n}.png"
         shutil.copy2(src, dest)
-        return self.import_file({**a, "path": str(dest)})
+        return self.import_file({**a, "path": str(dest), "created": True})
 
     # --- files the editor adds ---
 
@@ -1588,17 +1595,26 @@ class Session:
             return {**res, "file": str(path)}
 
     def import_file(self, a: dict) -> dict:
-        """A dropped or chosen file onto the figure: {figure, path, x, y, w?, label?}. Pictures outside the project are
-        copied into its images folder; a .py file becomes a panel."""
+        """A dropped or chosen file onto the figure: {figure, path, x, y, w?, label?, created?}. Pictures outside
+        the project are copied into its images folder; a .py file becomes a panel. The copy, and the file itself when
+        `created` (made just for this, as a BioCartoon icon or a pasted picture), are undone with the insertion."""
         src = Path(a["path"]).resolve()
+        made = [src] if a.get("created") else []
         try:
-            rel = self._bring_in(src)
+            rel = self._bring_in(src, made)
         except EditError as exc:
             return {"ok": False, "error": str(exc)}
+        res = self._import(a, src, rel, made)
+        if not res.get("ok"):                          # nothing placed: don't leave the copy behind
+            for p in made:
+                p.unlink(missing_ok=True)
+        return res
+
+    def _import(self, a, src, rel, made) -> dict:
         x, y = float(a.get("x", 5)), float(a.get("y", 5))
         if src.suffix.lower() in TABLE_FILES:
             return self.edit({"figure": a["figure"], "op": "insert", "kind": "table", "pxPerMM": a.get("pxPerMM"),
-                              "props": {"source": str(rel), "x": x, "y": y}})
+                              "props": {"source": str(rel), "x": x, "y": y}, "_new_files": made})
         if src.suffix == ".py":
             text = src.read_text(encoding="utf-8", errors="replace")
             fn = "draw"
@@ -1611,12 +1627,12 @@ class Session:
             if fn != "draw":
                 props["function"] = fn
             return self.edit({"figure": a["figure"], "op": "insert", "kind": "panel", "props": props,
-                              "pxPerMM": a.get("pxPerMM")})
+                              "pxPerMM": a.get("pxPerMM"), "_new_files": made})
         props = {"source": str(rel), "x": x, "y": y, "w": float(a.get("w", 60))}
         if "label" in a:                                 # None: no panel letter (an icon)
             props["label"] = a["label"]
         return self.edit({"figure": a["figure"], "op": "insert", "kind": "image", "pxPerMM": a.get("pxPerMM"),
-                          "props": props})
+                          "props": props, "_new_files": made})
 
     # --- panels from an SSH server ---
 
@@ -1651,7 +1667,7 @@ class Session:
         except SyntaxError as exc:
             return {"ok": False, "error": f"{name} isn't valid Python (line {exc.lineno}): {exc.msg}"}
         dest.write_text(remote.with_header(text, host, path), encoding="utf-8")
-        res = self.import_file({**a, "path": str(dest)})
+        res = self.import_file({**a, "path": str(dest), "created": True})
         if not res.get("ok"):
             dest.unlink(missing_ok=True)
         return {**res, "file": str(dest)}

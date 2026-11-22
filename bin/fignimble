@@ -1,7 +1,13 @@
 #!/bin/bash
 # The fignimble command line (render, check, export figures). Uses $FIGNIMBLE_PYTHON, else the Python environment the
 # installer made, else this checkout's .venv, else python3 on the PATH.
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+# through a link (~/.local/bin/fignimble -> the app's copy), to where the script really is
+SRC="${BASH_SOURCE[0]}"
+while [ -L "$SRC" ]; do
+  DIR="$(cd -P "$(dirname "$SRC")" && pwd)"; SRC="$(readlink "$SRC")"
+  case "$SRC" in /*) ;; *) SRC="$DIR/$SRC" ;; esac
+done
+HERE="$(cd -P "$(dirname "$SRC")" && pwd)"
 if [ -d "$HERE/../engine/fignimble" ]; then ENGINE="$HERE/../engine"; else ENGINE="$HERE/../Resources/engine"; fi
 for py in "${FIGNIMBLE_PYTHON:-}" "$HOME/Library/Application Support/Fignimble/python/bin/python" "$HERE/../.venv/bin/python" "$(command -v python3)"; do
   if [ -n "$py" ] && [ -x "$py" ]; then PY="$py"; break; fi

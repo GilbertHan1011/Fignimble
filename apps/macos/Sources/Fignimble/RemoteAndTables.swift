@@ -238,3 +238,50 @@ final class RemoteDialog: NSObject, NSTableViewDataSource, NSTableViewDelegate, 
         importButton.isEnabled = r >= 0 && r < entries.count && !entries[r].dir
     }
 }
+
+// MARK: - the command line
+
+extension MainController {
+    /// Fignimble ▸ Install Command Line Tool…: `fignimble` in ~/.local/bin (a link to the app's copy, so it follows
+    /// the app's updates), and that folder on the login shell's PATH when it isn't, so Terminal, VS Code and coding
+    /// agents outside Fignimble can run `fignimble snapshot`, `export`, `table`… No administrator password.
+    @objc func installCommandLineTool(_ sender: Any?) {
+        let fm = FileManager.default
+        let bin = NSHomeDirectory() + "/.local/bin", link = bin + "/fignimble"
+        let target = TerminalSession.fignimbleBin + "/fignimble"
+        guard fm.fileExists(atPath: target) else { alert("The fignimble command is missing from the app", target); return }
+        if let attrs = try? fm.attributesOfItem(atPath: link), attrs[.type] as? FileAttributeType != .typeSymbolicLink {
+            let a = NSAlert(); a.messageText = "Replace ~/.local/bin/fignimble?"
+            a.informativeText = "There is a file of that name there already, not one Fignimble made."
+            a.addButton(withTitle: "Replace"); a.addButton(withTitle: "Cancel")
+            if a.runModal() != .alertFirstButtonReturn { return }
+        }
+        do {
+            try fm.createDirectory(atPath: bin, withIntermediateDirectories: true)
+            try? fm.removeItem(atPath: link)
+            try fm.createSymbolicLink(atPath: link, withDestinationPath: target)
+        } catch { alert("Couldn't install the fignimble command", error.localizedDescription); return }
+        // is ~/.local/bin on the PATH a new terminal gets?
+        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+        let p = Process(), out = Pipe()
+        p.executableURL = URL(fileURLWithPath: shell); p.arguments = ["-ilc", "echo \"@@$PATH\""]
+        p.standardOutput = out; p.standardError = FileHandle.nullDevice; p.standardInput = FileHandle.nullDevice
+        try? p.run(); p.waitUntilExit()
+        let path = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            .components(separatedBy: "@@").last?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if path.split(separator: ":").contains(where: { $0 == bin || $0 == "~/.local/bin" }) {
+            toast("Installed: run fignimble in any new terminal")
+            return
+        }
+        let profile = NSHomeDirectory() + (shell.hasSuffix("bash") ? "/.bash_profile" : "/.zprofile")
+        let a = NSAlert()
+        a.messageText = "Add ~/.local/bin to your PATH?"
+        a.informativeText = "fignimble is installed in ~/.local/bin, which your shell doesn't search. Fignimble can add this line to \((profile as NSString).abbreviatingWithTildeInPath):\n\nexport PATH=\"$HOME/.local/bin:$PATH\""
+        a.addButton(withTitle: "Add It"); a.addButton(withTitle: "Not Now")
+        guard a.runModal() == .alertFirstButtonReturn else { toast("Installed in ~/.local/bin (not on your PATH)"); return }
+        let line = "\n# added by Fignimble (Install Command Line Tool)\nexport PATH=\"$HOME/.local/bin:$PATH\"\n"
+        if let h = FileHandle(forWritingAtPath: profile) { h.seekToEndOfFile(); h.write(Data(line.utf8)); try? h.close() }
+        else { try? line.write(toFile: profile, atomically: true, encoding: .utf8) }
+        toast("Installed: run fignimble in a new terminal window")
+    }
+}

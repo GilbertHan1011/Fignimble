@@ -67,7 +67,7 @@ final class BottomDrawer: NSView {
 
     func rebuildStrip() {
         strip.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        strip.addArrangedSubview(DrawerTab(title: "Code", tip: "The figure's Python and its panels' (⌥⌘C)", selected: page == .code,
+        strip.addArrangedSubview(DrawerTab(title: "Code", tip: "The figure's Python and its panels' (⌥⌘E)", selected: page == .code,
                                            onSelect: { [weak self] in self?.show(.code) }, onClose: nil))
         let n = problems.count
         strip.addArrangedSubview(DrawerTab(title: n > 0 ? "Preflight (\(n))" : "Preflight", tip: "What a journal would complain about",

@@ -103,7 +103,7 @@ extension MainController {
             BCDownloads.add(icon)
             let aspect = size.width > 0 && size.height > 0 ? Double(size.height / size.width) : 1
             let w = aspect > 1 ? 25 / aspect : 25, h = w * aspect
-            placePicture(dest.path, x: Double(c.x) - w / 2, y: Double(c.y) - h / 2, w: w, lettered: false)
+            placePicture(dest.path, x: Double(c.x) - w / 2, y: Double(c.y) - h / 2, w: w, lettered: false, created: true)
         }
     }
 

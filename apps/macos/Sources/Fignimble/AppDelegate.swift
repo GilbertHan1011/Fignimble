@@ -95,6 +95,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let sep = { NSMenuItem.separator() }
 
         menu("Fignimble", [item("About Fignimble", #selector(NSApplication.orderFrontStandardAboutPanel(_:)), to: NSApp), sep(),
+                        item("Install Command Line Tool…", #selector(MainController.installCommandLineTool(_:))), sep(),
                         item("Hide Fignimble", #selector(NSApplication.hide(_:)), "h", to: NSApp),
                         item("Hide Others", #selector(NSApplication.hideOtherApplications(_:)), "h", [.command, .option], to: NSApp), sep(),
                         item("Quit Fignimble", #selector(NSApplication.terminate(_:)), "q", to: NSApp)])
@@ -172,7 +173,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                       sub("Appearance", [item("System", #selector(MainController.setAppearance(_:)), tag: 0),
                                          item("Light", #selector(MainController.setAppearance(_:)), tag: 1),
                                          item("Dark", #selector(MainController.setAppearance(_:)), tag: 2)]), sep(),
-                      item("Code", #selector(MainController.showCodePane(_:)), "c", [.command, .option]),
+                      item("Code", #selector(MainController.showCodePane(_:)), "e", [.command, .option]),
                       item("Preflight", #selector(MainController.showProblems(_:)), "p", [.command, .option]),
                       item("History", #selector(MainController.showHistory(_:)), "h", [.command, .option, .shift]),
                       item("Terminal", #selector(MainController.showTerminal(_:)), "t", [.command, .option]),

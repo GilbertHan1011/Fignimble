@@ -167,7 +167,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
                     b("arrow.up.left.and.down.right.magnifyingglass", "Fit the figure (⌘0)", #selector(zoomFit(_:)))]
         let zoomSep = sep()
         let extras = [b("moon", "Dark version of the figure, for talks (⌥⌘D)", #selector(toggleDarkPreview(_:))),
-                      b("chevron.left.forwardslash.chevron.right", "The code of the figure and of what is selected (⌥⌘C)", #selector(showCodePane(_:))),
+                      b("chevron.left.forwardslash.chevron.right", "The code of the figure and of what is selected (⌥⌘E)", #selector(showCodePane(_:))),
                       b("terminal", "Terminal for a coding agent (⌥⌘T)", #selector(showTerminal(_:))),
                       b("square.and.arrow.up", "Export the figure (⌘E)", #selector(exportFigure(_:)))]
         let row = NSStackView(views: [toolControl, sep(), panel, image, icons, alignSep, alignStack, spacer] + zoom + [zoomSep] + extras)
@@ -324,7 +324,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         a.messageText = "Your figures are Python code"
         a.informativeText = "This figure is \(fig) in\n\((p as NSString).abbreviatingWithTildeInPath)\n\n"
             + "Everything you do here (moving, resizing, retyping, styling) is written into that code straight away; there is "
-            + "nothing to save. The Code tab (⌥⌘C) shows the code of whatever you select: a panel's own drawing code, or the "
+            + "nothing to save. The Code tab (⌥⌘E) shows the code of whatever you select: a panel's own drawing code, or the "
             + "figure's line that places it. Agents in the terminal edit the same files."
         a.addButton(withTitle: "Got It")
         a.addButton(withTitle: "Show in Finder")
@@ -453,7 +453,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
             self.pill.hide()
         }
     }
-    private func alert(_ title: String, _ text: String) {
+    func alert(_ title: String, _ text: String) {
         let a = NSAlert(); a.messageText = title; a.informativeText = text; a.addCopyButton()
         a.beginSheetModal(for: window)
     }
@@ -1012,13 +1012,14 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
     }
 
     /// A picture file placed at (x, y), w mm wide (it stays in images/ when it is there already); `lettered` false
-    /// gives it no panel letter.
-    func placePicture(_ path: String, x: Double, y: Double, w: Double, lettered: Bool = true) {
+    /// gives it no panel letter; `created`: the file was made for this (a BioCartoon icon), so undo removes it too.
+    func placePicture(_ path: String, x: Double, y: Double, w: Double, lettered: Bool = true, created: Bool = false) {
         guard let name = current else { return }
         enqueue { [self] in
             do {
                 var a: [String: Any] = ["figure": name, "path": path, "x": x, "y": y, "w": w, "pxPerMM": lastPx]
                 if !lettered { a["label"] = NSNull() }
+                if created { a["created"] = true }
                 let r = try await engine.json("import_file", a)
                 if let fig = r["figure"] as? [String: Any] { apply(fig) }
                 if let sel = r["select"] as? [String] { canvas.selection = sel }

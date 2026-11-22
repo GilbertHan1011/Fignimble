@@ -179,7 +179,7 @@ The app itself follows the system's light or dark appearance, or **View ▸ Appe
 - Inspector: position and size in mm, each element's settings, the figure size (with journal widths), the shared
   style and the label style. Layers list, figure thumbnails, preflight list.
 - Drop PNG/TIFF/JPEG/PDF/SVG files or `.py` panel files onto the canvas.
-- Code pane (⌥⌘C) with the figure, style and panel files; ⌘S applies. Undo (⌘Z) undoes canvas and code-pane
+- Code pane (⌥⌘E) with the figure, style and panel files; ⌘S applies. Undo (⌘Z) undoes canvas and code-pane
   edits; an undo leaves alone lines an agent has changed since.
 - Terminals (⌥⌘T) in the project folder, with a **Run claude** button (or Codex, Gemini CLI, any command).
 
@@ -208,6 +208,9 @@ open it and drag Fignimble to Applications. The first time it opens it offers to
 Python 3.11 with matplotlib, PyMuPDF, Pillow, NumPy and BioCartoon into `~/Library/Application Support/Fignimble`
 (about 260 MB, a minute or less, no password; `apps/macos/setup_python.sh` does it). Or choose a Python of your own
 that has them (`pip install matplotlib "pymupdf<2" pillow numpy`).
+
+**The `fignimble` command** works in Fignimble's terminal; Fignimble ▸ Install Command Line Tool… puts it in
+`~/.local/bin` for Terminal, VS Code and agents elsewhere (and offers to add that folder to your PATH).
 
 **From source:** macOS 13 or later with Xcode (or its command line tools) and Python 3.10+.
 

@@ -570,3 +570,28 @@ def test_panel_from_ssh_server(session, tmp_path, monkeypatch):
     assert not bad["ok"] and "couldn't fetch" in bad["error"]
     assert not session.remote_list({"host": "-oProxyCommand=x"})["ok"]
     session.undo({"figure": "fig1"})
+
+
+def test_undo_takes_away_files_made_for_an_insert(session, tmp_path):
+    csv = tmp_path / "counts.csv"
+    csv.write_text("a,b\n1,2\n")
+    r = session.import_file({"figure": "fig1", "path": str(csv), "x": 5, "y": 90})
+    assert r["ok"], r.get("error")
+    copied = session.project / "tables" / "counts.csv"
+    assert copied.exists()
+    session.undo({"figure": "fig1"})
+    assert not copied.exists() and "counts.csv" not in fig_text(session)
+    session.redo_({"figure": "fig1"})
+    assert copied.exists() and "counts.csv" in fig_text(session)
+    session.undo({"figure": "fig1"})
+    # a picture made just for the insert (a BioCartoon icon, already in images/) goes with it too
+    icon = session.project / "images" / "icon_test.png"
+    shutil.copy(session.project / "images" / "cells.png", icon)
+    r = session.import_file({"figure": "fig1", "path": str(icon), "x": 5, "y": 5, "w": 10, "created": True})
+    assert r["ok"], r.get("error")
+    session.undo({"figure": "fig1"})
+    assert not icon.exists()
+    # a picture of the project's own is never removed
+    r = session.import_file({"figure": "fig1", "path": str(session.project / "images" / "cells.png"), "x": 5, "y": 5})
+    session.undo({"figure": "fig1"})
+    assert (session.project / "images" / "cells.png").exists()
