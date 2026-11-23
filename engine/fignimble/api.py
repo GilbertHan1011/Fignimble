@@ -73,6 +73,65 @@ def color(name, default: str | None = None) -> str:
     raise KeyError(f"no colour {name!r} in the style's palette")
 
 
+_CACHE: dict = {}                      # what cached() kept in this process: shared by the panels of a render
+
+
+def cached(*files):
+    """Keep what a function returns, so the panels that need the same slow result (data loaded and cleaned, a model
+    fitted) compute it once:
+
+        @cached("data/recordings.csv")
+        def spikes(states):
+            ...
+
+    The result is kept in memory and on disk (the project's .fignimble/cache) until the function's file changes,
+    its arguments change, or one of `files` (relative to the project) changes. Results must pickle. Every caller gets
+    the same object, so copy a result (`df.copy()`) before changing it in place."""
+    import functools
+    import hashlib
+    import inspect
+    import os
+    import pickle
+    from pathlib import Path
+
+    def wrap(fn):
+        @functools.wraps(fn)
+        def inner(*args, **kwargs):
+            src = inspect.getsourcefile(fn) or ""
+            try:
+                code = Path(src).read_bytes()
+            except OSError:
+                code = fn.__code__.co_code
+            stamps = []
+            for f in files:
+                try:
+                    st = os.stat(f)
+                    stamps.append((f, st.st_mtime_ns, st.st_size))
+                except OSError:
+                    stamps.append((f, None))
+            h = hashlib.sha256(pickle.dumps((os.getcwd(), fn.__module__, fn.__qualname__, code, args,
+                                             sorted(kwargs.items()), stamps))).hexdigest()[:24]
+            if h in _CACHE:
+                return _CACHE[h]
+            folder = Path(".fignimble") / "cache"         # panels run in the project folder
+            f = folder / f"{fn.__name__}-{h}.pkl"
+            try:
+                value = pickle.loads(f.read_bytes())
+            except Exception:                              # noqa: BLE001 (not kept yet, or unreadable)
+                value = fn(*args, **kwargs)
+                try:
+                    folder.mkdir(parents=True, exist_ok=True)
+                    tmp = f.with_suffix(f".{os.getpid()}.tmp")
+                    tmp.write_bytes(pickle.dumps(value))
+                    tmp.replace(f)
+                except Exception:                          # noqa: BLE001 (unpicklable: memory only)
+                    pass
+            _CACHE[h] = value
+            return value
+        return inner
+    return wrap
+
+
 def is_dark() -> bool:
     """True while a panel is drawn for the dark version of its figure: panel code that picks its own colours can
     pick ones that read on black (`"white" if is_dark() else "black"`)."""
@@ -554,10 +613,16 @@ class Figure:
 
     def rect(self, x: float, y: float, w: float, h: float, stroke: str | None = "#000000", fill: str | None = None,
              width: float = 0.5, radius: float = 0, dash: str | None = None, opacity: float = 1.0,
+             label=None, label_dx: float | None = None, label_dy: float | None = None,
              group: str | None = None, name: str | None = None, locked: bool = False, hidden: bool = False) -> Element:
-        """A rectangle; `radius` (mm) rounds its corners. stroke/fill None: no outline / no fill."""
-        return self._add("rect", "rect", dict(x=x, y=y, w=w, h=h, stroke=stroke, fill=fill, width=width,
-                                              radius=radius, dash=dash, opacity=opacity, group=group, name=name, locked=locked, hidden=hidden))
+        """A rectangle; `radius` (mm) rounds its corners. stroke/fill None: no outline / no fill. `label` "auto"
+        letters it like a panel (a schematic drawn on it, say), or is a letter of its own; None (the default): no
+        letter."""
+        props = dict(x=x, y=y, w=w, h=h, stroke=stroke, fill=fill, width=width, radius=radius, dash=dash,
+                     opacity=opacity, group=group, name=name, locked=locked, hidden=hidden)
+        if label is not None:
+            props.update(label=label, label_dx=label_dx, label_dy=label_dy)
+        return self._add("rect", "rect", props)
 
     def ellipse(self, x: float, y: float, w: float, h: float, stroke: str | None = "#000000",
                 fill: str | None = None, width: float = 0.5, dash: str | None = None, opacity: float = 1.0,

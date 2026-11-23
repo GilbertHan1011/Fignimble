@@ -14,6 +14,8 @@ Coordinates are millimetres from the figure's top-left corner, y down.
 | `open` | `project` (folder) | `{ok, project}`; writes the agent instruction files the project lacks |
 | `close` | | `{ok}`; removes them again |
 | `new_project` | `dir`, `journal?` | `{ok, project, figure}` |
+| `requirements` | | `{python, engine: [{requirement, why}], project: [...], file}`: packages Fignimble and the project's requirements.txt need that the Python lacks |
+| `install` | `requirements` | `{ok, output}`: pip installs them into the engine's Python and restarts the renderer |
 | `state` | | `{project, figures: [{name, file, thumb, error, warnings}], canUndo, canRedo, undoLabel, redoLabel, panels}` |
 | `figure` | `name`, `pxPerMM?` (sprite resolution), `dark?` (show dark versions from now on) | a render (below) |
 | `edit` | `figure`, `op`, op arguments, `pxPerMM?` | `{ok, error?, figure, select?}`: the render after the edit, and the new elements to select |

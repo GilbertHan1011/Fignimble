@@ -310,6 +310,47 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
             let name = fig ?? (figures.first?["name"] as? String)
             if let n = name { await load(n) } else { canvas.setFigure(nil); inspector.update(); status.stringValue = "No figures yet: File ▸ New Figure (⌘N)." }
             explainProjectOnce()
+            checkPackages(asked: false)
+        }
+    }
+
+    @objc func checkPackagesNow(_ sender: Any?) { checkPackages(asked: true) }
+
+    /// What Fignimble (engine/requirements.txt) and the project (its requirements.txt) need that the Python lacks:
+    /// offered for install with pip, once per project and set of packages unless asked from the menu.
+    func checkPackages(asked: Bool) {
+        enqueue { [weak self] in
+            guard let self, let r = try? await self.engine.json("requirements") else { return }
+            let rows = ((r["engine"] as? [[String: Any]]) ?? []) + ((r["project"] as? [[String: Any]]) ?? [])
+            let reqs = rows.compactMap { $0["requirement"] as? String }
+            guard !reqs.isEmpty else { if asked { self.toast("Everything Fignimble and this project need is installed") }; return }
+            let key = (self.project ?? "") + "|" + reqs.joined(separator: ",")
+            var seen = UserDefaults.standard.stringArray(forKey: "packagesOffered") ?? []
+            if !asked && (seen.contains(key) || ProcessInfo.processInfo.environment["FIGNIMBLE_SHOTS"] != nil) { return }
+            seen.append(key)
+            UserDefaults.standard.set(Array(seen.suffix(50)), forKey: "packagesOffered")
+            let python = r["python"] as? String ?? "Fignimble's Python"
+            let list = rows.map { row -> String in
+                let why = row["why"] as? String ?? ""
+                return "• \(row["requirement"] as? String ?? "")" + (why == "not installed" ? "" : " (\(why))")
+            }.joined(separator: "\n")
+            let a = NSAlert()
+            a.messageText = "Install the packages this needs?"
+            let fromProject = !((r["project"] as? [Any]) ?? []).isEmpty
+            a.informativeText = (fromProject ? "This project's requirements.txt and Fignimble list packages" : "Fignimble needs packages")
+                + " that its Python doesn't have:\n\n\(list)\n\nInstall installs them with pip into \((python as NSString).abbreviatingWithTildeInPath)."
+            a.addButton(withTitle: "Install"); a.addButton(withTitle: "Not Now")
+            guard await a.beginSheetModal(for: self.window) == .alertFirstButtonReturn else { return }
+            self.busy("Installing \(reqs.count == 1 ? reqs[0] : "\(reqs.count) packages")…")
+            let res = (try? await self.engine.json("install", ["requirements": reqs])) ?? ["ok": false, "output": "the engine stopped"]
+            self.idle()
+            if res["ok"] as? Bool == true {
+                self.toast("Installed \(reqs.joined(separator: ", "))")
+                await self.refreshState()
+                if let n = self.current { await self.load(n) }       // the engine renders again with them
+            } else {
+                self.alert("The packages couldn't be installed", res["output"] as? String ?? "")
+            }
         }
     }
 

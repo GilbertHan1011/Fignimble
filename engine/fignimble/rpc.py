@@ -46,6 +46,17 @@ def main():
         app["s"] = s
         return {"ok": True, "project": str(s.project)}
 
+    def requirements(a):
+        from . import requirements as reqs
+        return reqs.missing(str(app["s"].project) if app["s"] else a.get("project"))
+
+    def install(a):
+        from . import requirements as reqs
+        res = reqs.install(list(a.get("requirements") or []))
+        if res["ok"] and app["s"]:
+            app["s"].restart_renderer()
+        return res
+
     def close(a):
         if app["s"]:
             app["s"].close()
@@ -56,6 +67,8 @@ def main():
         "open": open_project,
         "close": close,
         "new_project": lambda a: templates.new_project(a["dir"], a.get("journal")),
+        "requirements": requirements,
+        "install": install,
         "state": lambda a: need().api_state(),
         "figure": lambda a: need().api_figure(a),
         "edit": lambda a: need().edit(a),

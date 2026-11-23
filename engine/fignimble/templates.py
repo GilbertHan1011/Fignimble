@@ -132,6 +132,12 @@ panel code rather than repeating hex codes, and keep colour-blind readers in min
 they can't tell apart). A panel's `texts={"ax0.xlabel": "..."}`, `text_style={"ax0.legend0": {"size": 8, "color": "#...", "weight": "bold"}}`
 and `colors={"ax0.line1": "#..."}` hold texts, text settings and colours the user changed on the canvas: leave them alone, or move them into the panel's code and remove the entries. `locked=True` / `hidden=True` are the user's layer settings: keep them.
 
+Panels may import any package. List those beyond matplotlib and numpy in the project's `requirements.txt` (pip's
+format), and Fignimble offers to install them when the project opens. Slow work several panels share (loading and
+cleaning data, fitting a model) goes in a function decorated `@cached("data/table.csv")` (from fignimble): it runs once
+and is kept until its file, its arguments or the listed data change. A rectangle can carry a panel letter
+(`fig.rect(..., label="auto")`), for schematics drawn from shapes and pictures.
+
 Tables: `fig.table("tables/counts.csv", x=4, y=80, decimals=2)` (CSV/TSV in `tables/`, or `rows=[[...], ...]`); keep
 the numbers in the data file, not in the figure. Journals want tables as text: `fignimble table fig1.py 3 table1.docx`
 writes one as a Word table.

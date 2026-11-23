@@ -469,6 +469,7 @@ final class Inspector: NSView {
             strokeRows(e, setp, fill: true)
             if e.kind == "rect" { row([("Corner radius", numberField(e.p("radius") ?? 0, width: 40) { setp(["radius": $0]) }), ("mm", NSView())]) }
             row([("Opacity", numberField((e.p("opacity") ?? 1) * 100, width: 40) { setp(["opacity": max(0, min(1, $0 / 100))]) }), ("%", NSView())])
+            if e.kind == "rect" { panelLabelRows(f, e) }        // a schematic's background can carry its letter
         case "table":
             section("Table")
             if let src = e.s("source") { note(src + "  ·  edit the file and the table follows") } else { note("rows written in the figure's code") }
@@ -547,7 +548,7 @@ final class Inspector: NSView {
         guard let m = main else { return }
         section("Label")
         let lab = e.props["label"]
-        let mode = lab is NSNull ? "None" : ((lab as? String) == "auto" ? "Automatic" : "Own")
+        let mode = lab == nil || lab is NSNull ? "None" : ((lab as? String) == "auto" ? "Automatic" : "Own")
         row([("", popup(["Automatic", "Own", "None"], mode, width: 100) { _, t in
                 let v: Any = t == "None" ? (NSNull() as Any) : (t == "Automatic" ? "auto" : (f.labelText(e.oid) ?? "a"))
                 m.edit(["op": "set", "oid": e.oid, "props": ["label": v]]) }),

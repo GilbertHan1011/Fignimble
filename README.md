@@ -41,6 +41,12 @@ def draw(fig, genes=("GAPDH", "CD3E")):
 Coordinates are millimetres from the top-left corner, y down, as in Illustrator. One call per element, with literal
 numbers, so that moving something on the canvas is a one-number change to its line of code.
 
+Panels can use any package (pandas, seaborn, statsmodels...). List the ones beyond matplotlib and NumPy in the
+project's `requirements.txt` and Fignimble offers to install them into its Python when the project opens (Fignimble ▸
+Check Packages… asks again). Slow work that several panels share, like loading data or fitting a model, goes in a
+function marked `@cached("data/table.csv")`: it runs once and is kept until its code, its arguments or that file
+changes.
+
 ## Patchwork-style layouts
 
 Panels can also be laid out the way [patchwork](https://patchwork.data-imaginist.com) composes ggplots, instead of

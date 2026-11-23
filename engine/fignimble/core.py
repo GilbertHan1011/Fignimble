@@ -307,6 +307,13 @@ class Session:
             self.renders[name] = (sig, px, res)
             return res
 
+    def restart_renderer(self):
+        """After packages were installed: a fresh worker that can import them, and every figure rendered again."""
+        with self.render_lock:
+            with self.worker.lock:
+                self.worker.kill()
+            self.renders.clear()
+
     def api_state(self) -> dict:
         figs = []
         for f in self.figures():

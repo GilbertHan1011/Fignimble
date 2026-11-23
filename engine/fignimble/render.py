@@ -18,6 +18,7 @@ import os
 import re
 import shutil
 import subprocess
+import warnings
 import tempfile
 import runpy
 import sys
@@ -48,7 +49,7 @@ VECTOR = (".pdf", ".svg")
 SKIP_DIRS = {".fignimble", ".git", "__pycache__", ".venv", "venv", "node_modules", ".ipynb_checkpoints"}
 
 
-CACHE_VERSION = 7                  # bump when a change to drawing makes cached pieces wrong
+CACHE_VERSION = 8                  # bump when a change to drawing makes cached pieces wrong
 
 
 def _h(*parts) -> str:
@@ -170,7 +171,10 @@ class Renderer:
     def _doc(self, path: str) -> pymupdf.Document:
         d = self._docs.get(path)
         if d is None:
-            d = pymupdf.open(path)
+            if path.lower().endswith(".svg"):          # MuPDF ignores an SVG's style sheet: write it onto the shapes
+                d = pymupdf.open("svg", _svg_without_css(Path(path).read_bytes()))
+            else:
+                d = pymupdf.open(path)
             if not d.is_pdf:
                 d = pymupdf.open("pdf", d.convert_to_pdf())
             self._docs[path] = d
@@ -247,18 +251,27 @@ class Renderer:
         pdf, meta = self.cache / "pieces" / f"{key}.pdf", self.cache / "pieces" / f"{key}.json"
         if pdf.exists() and meta.exists():
             return {"pdf": str(pdf), "key": key, **json.loads(meta.read_text())}
-        try:
-            data, margins, entries, found, marks = self._draw_panel(self._panel_fn(props, fn, path), props["args"], w, h,
-                                                                    rc, collect, background=background,
-                                                                    texts=props.get("texts"), colors=props.get("colors"),
-                                                                    text_style=props.get("text_style"))
-        except Exception:                               # noqa: BLE001
-            return {"error": _user_traceback(where)}
+        # the panel code's Python warnings (deprecations in the libraries it uses, say) are kept with the panel,
+        # not printed, so they don't bury the messages that matter
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            try:
+                data, margins, entries, found, marks = self._draw_panel(self._panel_fn(props, fn, path), props["args"],
+                                                                        w, h, rc, collect, background=background,
+                                                                        texts=props.get("texts"),
+                                                                        colors=props.get("colors"),
+                                                                        text_style=props.get("text_style"))
+            except Exception:                           # noqa: BLE001
+                return {"error": _user_traceback(where)}
+        said = list(dict.fromkeys(f"{w_.category.__name__}: {str(w_.message).strip().splitlines()[0]}"
+                                  for w_ in caught if w_.message))
         _write(pdf, data)
-        meta.write_text(json.dumps({"margins": margins, "entries": entries, "texts": found, "marks": marks}))
+        meta.write_text(json.dumps({"margins": margins, "entries": entries, "texts": found, "marks": marks,
+                                    "warnings": said}))
         ekey = _h("entries", code, None if fn else props["source"], props["function"], props["args"], rc, deps)
         (self.cache / "pieces" / f"{ekey}.entries.json").write_text(json.dumps(entries))
-        return {"pdf": str(pdf), "key": key, "margins": margins, "entries": entries, "texts": found, "marks": marks}
+        return {"pdf": str(pdf), "key": key, "margins": margins, "entries": entries, "texts": found, "marks": marks,
+                "warnings": said}
 
     def _panel_aligned(self, props, w, h, rc, deps, collect, base, target, background=None) -> tuple[str, dict]:
         """The panel redrawn with its plot area at `target` margins (mm): (pdf, {texts, marks})."""
@@ -269,9 +282,11 @@ class Renderer:
         pdf, meta = self.cache / "pieces" / f"{key}.pdf", self.cache / "pieces" / f"{key}.texts.json"
         if not (pdf.exists() and meta.exists()):
             code, fn, path, where = self._panel_code(props)
-            data, _, _, found, marks = self._draw_panel(self._panel_fn(props, fn, path), props["args"], w, h, rc,
-                                                        collect, target, background, props.get("texts"),
-                                                        props.get("colors"), props.get("text_style"))
+            with warnings.catch_warnings():             # said once already, when it was drawn as its code lays it out
+                warnings.simplefilter("ignore")
+                data, _, _, found, marks = self._draw_panel(self._panel_fn(props, fn, path), props["args"], w, h, rc,
+                                                            collect, target, background, props.get("texts"),
+                                                            props.get("colors"), props.get("text_style"))
             _write(pdf, data)
             meta.write_text(json.dumps({"texts": found, "marks": marks}))
         return str(pdf), json.loads(meta.read_text())
@@ -374,6 +389,10 @@ class Renderer:
 
     def rc_for(self, style) -> dict:
         rc = style.rcparams()
+        # mathtext (Agg$^{+}$, 10$^{3}$) in the style's font too, unless the style sets its own
+        for k, v in _math_rc(rc["font.sans-serif"]).items():
+            if k not in style.rc:
+                rc[k] = v
         if self.dark:
             rc.update(DARK_RC)
             rc.update({k: v for k, v in style.rc.items()})
@@ -443,6 +462,26 @@ class Renderer:
             im.save(out)
             return str(out), im.width, im.height
 
+    def _mirrored(self, src: Path, flip: str) -> Path:
+        """A PDF of a PDF or SVG picture mirrored left to right ("h") or top to bottom ("v"), still vector."""
+        st = src.stat()
+        out = self.cache / "images" / f"{_h('mirror', str(src), st.st_mtime_ns, st.st_size, flip)}.pdf"
+        if not out.exists():
+            r = self._doc(str(src))[0].rect
+            doc = pymupdf.open()
+            page = doc.new_page(width=r.width, height=r.height)
+            page.show_pdf_page(page.rect, self._doc(str(src)), 0)
+            flipm = f"-1 0 0 1 {r.width:.4f} 0 cm" if flip == "h" else f"1 0 0 -1 0 {r.height:.4f} cm"
+            xrefs = page.get_contents()
+            body = b"\n".join(doc.xref_stream(x) for x in xrefs)
+            doc.update_stream(xrefs[0], f"q {flipm}\n".encode() + body + b"\nQ")
+            for x in xrefs[1:]:
+                doc.update_stream(x, b"")
+            tmp = out.with_suffix(".tmp")
+            doc.save(str(tmp))
+            tmp.replace(out)
+        return out
+
     def image_box(self, props: dict) -> tuple:
         h = props["h"]
         if h is None:
@@ -457,14 +496,19 @@ class Renderer:
         meta = {"source": str(src)}
         rot = p.get("rotation") or 0
         if ext in VECTOR:
-            if p.get("flip"):
-                raise ValueError("flip works for PNG, TIFF and JPEG pictures; PDF and SVG can be turned, not flipped")
             if round(rot) % 90:
                 raise ValueError("PDF and SVG pictures turn in quarter turns (90, 180, 270)")
             quarter = round(rot) % 180 == 90
+            flip = p.get("flip")
+            if flip in ("h", "v"):
+                src = self._mirrored(src, flip)         # a PDF of the picture mirrored; the crop is the original's
             doc = self._doc(str(src))
             pr = doc[0].rect
             l, t, r, b = p["crop"] or (0, 0, 0, 0)
+            if flip == "h":
+                l, r = r, l
+            elif flip == "v":
+                t, b = b, t
             clip = pymupdf.Rect(pr.x0 + pr.width * l, pr.y0 + pr.height * t, pr.x1 - pr.width * r, pr.y1 - pr.height * b)
             dest = (0, 0, w, h)
             aspect = clip.height / clip.width if quarter else clip.width / clip.height
@@ -617,6 +661,8 @@ class Renderer:
                     pc = _shape_piece(oid, e, self.c)
                     box = pc.box
                     steps.append(pc)
+                    if e.kind == "rect" and p.get("label") is not None:     # lettered like a panel
+                        panels.append((p, oid, (p["x"], p["y"], p["w"], p["h"])))
                 elif e.kind == "path":
                     pc = _path_piece(oid, e, self.c)
                     box = pc.box
@@ -650,6 +696,10 @@ class Renderer:
                 box = _rough_box(e)
                 info["error"] = f"{type(exc).__name__}: {exc}"
                 steps.append(_error_piece(oid, box, info["error"]))
+                # it keeps its letter, so one broken picture doesn't reletter every panel after it
+                if (e.kind == "image" or (e.kind == "rect" and p.get("label") is not None)) \
+                        and not any(o == oid for _, o, _ in panels):
+                    panels.append((p, oid, box))
             boxes[id(e)] = box
             oids[id(e)] = oid
             info["box"] = [round(v, 4) for v in box]
@@ -699,6 +749,8 @@ class Renderer:
             rot = s_["props"].get("rotation") or 0
             if info is not None:
                 info["margins"] = base.get("margins")
+                if base.get("warnings"):
+                    info["pyWarnings"] = base["warnings"]
                 info["aligned"] = targets.get(oid)
                 if not rot:                             # where its texts and marks are, to retype and recolour them
                     info["texts"] = [{**t, "box": [round(box[0] + t["box"][0], 3), round(box[1] + t["box"][1], 3),
@@ -980,8 +1032,12 @@ class Renderer:
 
         for info in infos:
             if info.get("error"):
-                warn.append({"level": "error", "oid": info["oid"],
-                             "message": f"{who(info['oid'])} failed: {info['error'].strip().splitlines()[-1]}"})
+                last = info["error"].strip().splitlines()[-1]
+                m = re.search(r"No module named '([\w.]+)'", last)
+                if m:                                   # what to do about it
+                    last += (f": add {m.group(1).split('.')[0]} to the project's requirements.txt and Fignimble offers "
+                             "to install it")
+                warn.append({"level": "error", "oid": info["oid"], "message": f"{who(info['oid'])} failed: {last}"})
         for pc in pieces:
             m = pc.meta
             if pc.kind in ("text", "label", "bracket") and m.get("size", 99) < min_font - 1e-6:
@@ -1042,8 +1098,9 @@ class Renderer:
         """What preflight needs from a panel's PDF (smallest text, Type 3 fonts, pictures), once per drawing."""
         got = self._facts_cache.get(pdf)
         if got is None:
-            sizes = [sp["size"] for b in page.get_text("dict").get("blocks", []) for ln in b.get("lines", [])
-                     for sp in ln.get("spans", []) if sp.get("text", "").strip()]
+            spans = [{**sp, "dir": ln.get("dir", (1, 0))} for b in page.get_text("dict").get("blocks", [])
+                     for ln in b.get("lines", []) for sp in ln.get("spans", []) if sp.get("text", "").strip()]
+            sizes = [sp["size"] for sp in spans if not _is_script(sp, spans)]
             got = {"min_size": min(sizes) if sizes else None,
                    "type3": next((f[3] for f in page.get_fonts() if f[2] == "Type3"), None),
                    "images": [{"bbox": tuple(i["bbox"]), "width": i["width"]} for i in page.get_image_info()]}
@@ -1742,6 +1799,78 @@ def _measure_texts(fig, h) -> list:
 
 
 _FONT_NAMES: dict = {}
+
+
+def _svg_without_css(data: bytes) -> bytes:
+    """An SVG with its <style> sheet's class rules (".st0{fill:#4D4D4D;}", as Illustrator writes them) and its style=""
+    attributes turned into presentation attributes (fill="#4D4D4D"), which MuPDF draws: it ignores the sheet, so such
+    shapes came out black."""
+    text = data.decode("utf-8", errors="replace")
+    rules: dict[str, dict] = {}
+    for sheet in re.findall(r"<style[^>]*>(.*?)</style>", text, re.S):
+        sheet = re.sub(r"/\*.*?\*/|<!\[CDATA\[|\]\]>", "", sheet, flags=re.S)
+        for sel, body in re.findall(r"([^{}]+)\{([^}]*)\}", sheet):
+            decl = _css_decls(body)
+            for s_ in sel.split(","):
+                s_ = s_.strip()
+                if re.fullmatch(r"\.[\w-]+", s_):
+                    rules.setdefault(s_[1:], {}).update(decl)
+    if not rules and "style=" not in text:
+        return data
+
+    def tag(m):
+        name, attrs, end = m.group(1), m.group(2) or "", m.group(3)
+        if name.lower() in ("style", "svg:style") or not attrs:
+            return m.group(0)
+        props: dict = {}
+        cls = re.search(r'\sclass\s*=\s*"([^"]*)"', attrs)
+        for c in (cls.group(1).split() if cls else []):
+            props.update(rules.get(c, {}))
+        st = re.search(r'\sstyle\s*=\s*"([^"]*)"', attrs)
+        if st:
+            props.update(_css_decls(st.group(1)))           # inline style wins over the sheet
+            attrs = attrs.replace(st.group(0), "")
+        if not props:
+            return m.group(0)
+        for k in props:                                     # the sheet wins over presentation attributes
+            attrs = re.sub(rf'\s{re.escape(k)}\s*=\s*"[^"]*"', "", attrs)
+        attrs += "".join(f' {k}="{v}"' for k, v in props.items())
+        return f"<{name}{attrs}{end}>"
+
+    text = re.sub(r"<([A-Za-z][\w:.-]*)(\s[^<>]*?)?(/?)>", tag, text)
+    return text.encode("utf-8")
+
+
+def _css_decls(body: str) -> dict:
+    out = {}
+    for d in body.split(";"):
+        if ":" in d:
+            k, v = d.split(":", 1)
+            k, v = k.strip().lower(), v.strip().replace('"', "'")
+            if k and v and k != "enable-background" and not v.endswith("!important"):
+                out[k] = v
+    return out
+
+
+def _is_script(span, spans) -> bool:
+    """A superscript or subscript: matplotlib draws them at 0.7 of the text before them with the baseline raised or
+    lowered, so Agg$^{+}$'s "+" at 4.9 pt beside 7 pt is not small text the way a 4.9 pt label is. Measured along
+    the text's own direction, so rotated tick labels count too."""
+    s = span["size"]
+    if len(span["text"].strip()) > 4:
+        return False
+    dx, dy = span["dir"]
+    sx, sy = span["origin"]
+    for o in spans:
+        S = o["size"]
+        if o is span or abs(s - 0.7 * S) > 0.02 * S or abs(o["dir"][0] - dx) + abs(o["dir"][1] - dy) > 0.02:
+            continue
+        ox, oy = o["origin"]
+        along = (sx - ox) * dx + (sy - oy) * dy              # from the start of the text before it
+        across = -(sx - ox) * dy + (sy - oy) * dx            # its baseline raised or lowered
+        if 0 < along <= (len(o["text"]) + 1) * S and 0.1 * S < abs(across) < 0.8 * S:
+            return True
+    return False
 
 
 def _math_rc(family) -> dict:

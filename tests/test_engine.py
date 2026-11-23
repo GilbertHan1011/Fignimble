@@ -623,3 +623,137 @@ def test_new_project_is_empty(tmp_path):
         assert s.api_state()["panels"] == []
     finally:
         s.close()
+
+
+def _render(tmp_path, figure: str, files: dict | None = None) -> dict:
+    """Render a small project made of `figure` (fig.py) and `files`, in this process."""
+    import os
+    from fignimble.render import Renderer
+    for name, text in {"fig.py": "from fignimble import *\n" + figure, **(files or {})}.items():
+        p = tmp_path / name
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text) if isinstance(text, str) else p.write_bytes(text)
+    cwd = os.getcwd()
+    try:
+        return Renderer(str(tmp_path)).render(str(tmp_path / "fig.py"), sprites=False)
+    finally:
+        os.chdir(cwd)
+
+
+def _pdf(tmp_path) -> str:
+    """fig.py of the project in tmp_path exported as PDF."""
+    import os
+    from fignimble.render import Renderer
+    cwd = os.getcwd()
+    try:
+        Renderer(str(tmp_path)).export(str(tmp_path / "fig.py"), str(tmp_path / "out.pdf"), "pdf")
+    finally:
+        os.chdir(cwd)
+    return str(tmp_path / "out.pdf")
+
+
+PANEL = "def draw(fig):\n    fig.add_subplot().plot([0, 1], [0, 1])\n"
+
+
+def test_failed_picture_keeps_its_letter(tmp_path):
+    r = _render(tmp_path, 'fig = Figure(width=120, height=40)\n'
+                          'fig.panel("p.py", x=0, y=0, w=35, h=35)\n'
+                          'fig.image("missing.png", x=40, y=0, w=35)\n'
+                          'fig.panel("p.py", x=80, y=0, w=35, h=35)\n', {"p.py": PANEL})
+    assert {l["panel"]: l["text"] for l in r["labels"]} == {"0": "a", "1": "b", "2": "c"}
+    assert any(w["level"] == "error" for w in r["warnings"])
+
+
+def test_vector_picture_mirrors(tmp_path):
+    import pymupdf
+    svg = ('<svg xmlns="http://www.w3.org/2000/svg" width="100" height="50">'
+           '<rect x="0" y="0" width="30" height="50" fill="black"/></svg>')
+    r = _render(tmp_path, 'fig = Figure(width=60, height=30)\n'
+                          'fig.image("s.svg", x=0, y=0, w=60, flip="h", label=None)\n', {"s.svg": svg})
+    assert not any(w["level"] == "error" for w in r["warnings"]), r["warnings"]
+    page = pymupdf.open(_pdf(tmp_path))[0]
+    pix = page.get_pixmap(dpi=72)
+    left, right = pix.pixel(5, pix.height // 2), pix.pixel(pix.width - 5, pix.height // 2)
+    assert sum(left[:3]) > 600 and sum(right[:3]) < 100           # the black bar moved to the right
+
+
+def test_superscripts_are_not_small_text(tmp_path):
+    ok = ('def draw(fig):\n    ax = fig.add_subplot()\n    ax.set_xticks([0, 1])\n'
+          '    ax.set_xticklabels(["Agg$^{+}$", "CD8$_{a}$"])\n')
+    small = 'def draw(fig):\n    ax = fig.add_subplot()\n    ax.set_xlabel("tiny", fontsize=4.5)\n'
+    r = _render(tmp_path, 'fig = Figure(width=90, height=40, style=Style(min_font=5))\n'
+                          'fig.panel("ok.py", x=2, y=2, w=40, h=35)\n'
+                          'fig.panel("small.py", x=48, y=2, w=40, h=35)\n', {"ok.py": ok, "small.py": small})
+    small_text = [w["message"] for w in r["warnings"] if "small" in w["message"] or "below" in w["message"]]
+    assert small_text == ["panel b: text as small as 4.5 pt (minimum 5 pt)"], small_text
+
+
+def test_panel_math_in_the_style_font(tmp_path):
+    import pymupdf
+    panel = 'def draw(fig):\n    fig.add_subplot().set_xlabel("10$^{3}$ cells")\n'
+    r = _render(tmp_path, 'fig = Figure(width=50, height=40, style=Style(font="Arial"))\n'
+                          'fig.panel("p.py", x=2, y=2, w=45, h=35)\n', {"p.py": panel})
+    fonts = {f[3].split("+")[-1] for f in pymupdf.open(_pdf(tmp_path))[0].get_fonts(full=True)}
+    assert not any("DejaVu" in f for f in fonts), fonts
+
+
+def test_rectangle_carries_a_letter(tmp_path):
+    r = _render(tmp_path, 'fig = Figure(width=120, height=40)\n'
+                          'fig.panel("p.py", x=0, y=0, w=35, h=35)\n'
+                          'fig.rect(40, 0, 35, 35, fill="#eeeeee", label="auto")\n'
+                          'fig.rect(40, 5, 10, 10)\n'
+                          'fig.panel("p.py", x=80, y=0, w=35, h=35)\n', {"p.py": PANEL})
+    assert {l["panel"]: l["text"] for l in r["labels"]} == {"0": "a", "1": "b", "3": "c"}
+
+
+def test_cached_runs_once(tmp_path):
+    import os
+    from fignimble import api
+    (tmp_path / "data.csv").write_text("1\n")
+    calls = tmp_path / "calls.txt"
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        @api.cached("data.csv")
+        def load(n):
+            with open(calls, "a") as f:
+                f.write("x")
+            return int(open("data.csv").read()) * n
+        assert load(2) == 2 and load(2) == 2
+        api._CACHE.clear()                       # a new process: from disk
+        assert load(2) == 2 and calls.read_text() == "x"
+        (tmp_path / "data.csv").write_text("5\n")
+        assert load(2) == 10 and calls.read_text() == "xx"
+    finally:
+        os.chdir(cwd)
+
+
+def test_panel_warnings_are_kept_not_printed(tmp_path, capfd):
+    panel = 'import warnings\ndef draw(fig):\n    warnings.warn("old way", FutureWarning)\n    fig.add_subplot()\n'
+    r = _render(tmp_path, 'fig = Figure(width=50, height=40)\nfig.panel("p.py", x=2, y=2, w=45, h=35)\n',
+                {"p.py": panel})
+    assert r["elements"][0]["pyWarnings"] == ["FutureWarning: old way"]
+    assert "old way" not in capfd.readouterr().err
+
+
+def test_project_requirements(tmp_path):
+    from fignimble import requirements
+    (tmp_path / "requirements.txt").write_text("matplotlib  # there\nno-such-package-fignimble-test>=1\n")
+    got = requirements.missing(str(tmp_path))
+    assert got["project"] == [{"requirement": "no-such-package-fignimble-test>=1", "why": "not installed"}]
+    assert got["file"].endswith("requirements.txt")
+    assert requirements.parse("# c\n-r other.txt\npandas>=2 # x\n\n") == ["pandas>=2"]
+
+
+def test_svg_style_sheet_is_drawn(tmp_path):
+    import pymupdf
+    svg = ('<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><style type="text/css">'
+           '.st0{fill:#FF0000;} .st1{fill:none;stroke:#0000FF;}</style>'
+           '<rect class="st0" x="0" y="0" width="20" height="20"/>'
+           '<rect class="st1" x="20" y="0" width="20" height="20" fill="#00FF00"/></svg>')
+    r = _render(tmp_path, 'fig = Figure(width=40, height=20)\nfig.image("s.svg", x=0, y=0, w=40, label=None)\n',
+                {"s.svg": svg})
+    assert not r["warnings"], r["warnings"]
+    pix = pymupdf.open(_pdf(tmp_path))[0].get_pixmap(dpi=72)
+    assert pix.pixel(pix.width // 4, pix.height // 2)[:3] == (255, 0, 0)          # the sheet's red, not black
+    assert pix.pixel(pix.width * 3 // 4, pix.height // 2)[:3] == (255, 255, 255)  # fill:none beats fill="#00FF00"

@@ -199,6 +199,11 @@ def _describe(res: dict):
         print(f"  #{e['oid']:<3} {e['kind']:8}{lab:5} {x:7.1f} {y:7.1f} {w:7.1f} {h:7.1f}  {what}  (line {line})")
         if e.get("error"):
             print("       ERROR " + e["error"].strip().replace("\n", "\n       "))
+    said = [(labels.get(e["oid"], "#" + e["oid"]), m) for e in res["elements"] for m in e.get("pyWarnings") or []]
+    if said:
+        print("python warnings from panel code:")
+        for who, m in said:
+            print(f"  panel {who}: {m}")
     if res["warnings"]:
         print("preflight:")
         for w in res["warnings"]:

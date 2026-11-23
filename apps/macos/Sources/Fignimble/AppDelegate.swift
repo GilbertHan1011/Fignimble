@@ -103,7 +103,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let sep = { NSMenuItem.separator() }
 
         menu("Fignimble", [item("About Fignimble", #selector(NSApplication.orderFrontStandardAboutPanel(_:)), to: NSApp), sep(),
-                        item("Install Command Line Tool…", #selector(MainController.installCommandLineTool(_:))), sep(),
+                        item("Install Command Line Tool…", #selector(MainController.installCommandLineTool(_:))),
+                        item("Check Packages…", #selector(MainController.checkPackagesNow(_:))), sep(),
                         item("Hide Fignimble", #selector(NSApplication.hide(_:)), "h", to: NSApp),
                         item("Hide Others", #selector(NSApplication.hideOtherApplications(_:)), "h", [.command, .option], to: NSApp), sep(),
                         item("Quit Fignimble", #selector(NSApplication.terminate(_:)), "q", to: NSApp)])
