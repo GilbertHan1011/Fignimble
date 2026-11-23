@@ -7,3 +7,4 @@ apps/macos/Fignimble.app/
 *.egg-info/
 *.zip
 .DS_Store
+_site/

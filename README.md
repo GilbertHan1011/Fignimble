@@ -6,6 +6,8 @@ is drawn by matplotlib code. You edit a figure on the canvas (drag, resize, alig
 asking a coding agent (Claude Code, Codex, Gemini CLI) in Fignimble's terminal. All three change the same files, and
 Fignimble re-renders as they change.
 
+**User guide: [pachterlab.github.io/Fignimble](https://pachterlab.github.io/Fignimble/)**
+
 Fignimble is built on [Manimble](https://github.com/pachterlab/Manimble): the engine/app split, the JSON-lines
 protocol, the undo model that coexists with an agent's edits, the terminal drawer and the agent instruction files
 come from there.

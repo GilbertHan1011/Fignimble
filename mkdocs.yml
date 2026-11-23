@@ -1,0 +1,111 @@
+site_name: Fignimble
+site_description: The Fignimble user guide. Fignimble is a macOS editor for multi-panel scientific figures, where every figure is Python code you can edit on the canvas, by hand, or with an AI coding agent.
+site_url: https://pachterlab.github.io/Fignimble/
+repo_url: https://github.com/pachterlab/Fignimble
+repo_name: pachterlab/Fignimble
+edit_uri: ""
+
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+copyright: Copyright &copy; Pachter Lab. Fignimble is free and open source under the BSD 2-Clause License.
+
+theme:
+  name: material
+  logo: assets/fignimble-icon.svg
+  favicon: assets/fignimble-icon.svg
+  icon:
+    repo: fontawesome/brands/github
+  font:
+    text: Inter
+    code: JetBrains Mono
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - navigation.footer
+    - navigation.indexes
+    - navigation.instant
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+
+extra_css:
+  - assets/fignimble.css
+
+extra:
+  generator: false
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/pachterlab/Fignimble
+      name: Fignimble on GitHub
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+not_in_nav: |
+  screenshot.png
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Introduction: getting-started/introduction.md
+      - Installation: getting-started/installation.md
+      - Quick start: getting-started/quick-start.md
+      - Key concepts: getting-started/concepts.md
+  - Making figures:
+      - The Fignimble window: guide/window.md
+      - Panels and their code: guide/panels.md
+      - Patchwork-style layouts: guide/layouts.md
+      - Pictures and BioCartoon icons: guide/pictures.md
+      - Text, arrows, shapes and tables: guide/annotating.md
+      - Labels, style and journals: guide/style.md
+      - Colour and dark versions: guide/colour.md
+      - Preflight and export: guide/export.md
+  - AI agents and the terminal: ai/agents.md
+  - Example: examples.md
+  - Reference:
+      - Python API: reference/python-api.md
+      - The fignimble command: reference/cli.md
+      - Keyboard shortcuts: reference/shortcuts.md
+      - Journal presets: reference/journals.md
+      - Troubleshooting and FAQ: reference/faq.md
+  - Developers:
+      - How Fignimble works: developers/architecture.md
+      - Engine protocol: protocol.md
