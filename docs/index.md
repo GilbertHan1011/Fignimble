@@ -36,9 +36,10 @@ code as a small, readable edit.
 Because the figure is code, it can do what a drawing can't. Panels redraw at their real size, so fonts and line
 widths stay true. Panel letters are added automatically and kept in reading order. One style sets the font and sizes
 of every panel, and a journal preset sets the widths, label style and resolution the journal asks for. Before you
-export, a preflight check finds small text, low-resolution pictures and colours colour-blind readers can't tell
+export, a preflight check finds small text, low-resolution pictures and colors color-blind readers can't tell
 apart. And because the code stays clean, you can open a terminal in the app, start Claude Code, Codex or Gemini CLI,
-and have the agent write panels while you watch the figure update.
+and have the agent write panels while you watch the figure update. When the data are on a Linux server, Fignimble
+can [open the project there](guide/remote.md): the server draws the panels and the Mac shows them.
 
 <div class="grid cards" markdown>
 
@@ -47,7 +48,7 @@ and have the agent write panels while you watch the figure update.
     ---
 
     Move, resize, align and distribute panels, pictures and annotations with smart guides. Retype and restyle the
-    texts inside a matplotlib panel, and recolour its lines and bars, without opening its code.
+    texts inside a matplotlib panel, and recolor its lines and bars, without opening its code.
 
     [:octicons-arrow-right-24: The Fignimble window](guide/window.md)
 
@@ -74,7 +75,7 @@ and have the agent write panels while you watch the figure update.
     ---
 
     40 journal presets set widths, fonts, panel labels and resolutions. Preflight checks the figure; export writes
-    PDF, EPS, SVG, TIFF, PNG or JPEG that meet the journal's rules.
+    PDF, EPS, SVG, TIFF, PNG, JPEG or PowerPoint that meet the journal's rules, and tables as Word or Excel.
 
     [:octicons-arrow-right-24: Preflight and export](guide/export.md)
 

@@ -17,7 +17,7 @@ When a project opens, Fignimble writes `CLAUDE.md`, `AGENTS.md` and `GEMINI.md` 
 none of its own, and removes them when the project closes. They tell the agent:
 
 - how a project is laid out: figure files, panel files with `draw(fig)`, `style.py`;
-- to keep positions as literal millimetres, so you can still drag what it places;
+- to keep positions as literal millimeters, so you can still drag what it places;
 - never to draw panel letters itself, and to leave fonts and sizes to the style;
 - to list the packages its panels import in `requirements.txt`, and to put slow shared work in `@cached` functions;
 - to leave alone the `texts=`, `colors=`, `locked=` and `hidden=` settings you made on the canvas;
@@ -43,7 +43,7 @@ overwrites yours: Fignimble edits files line by line, the way a person would.
 ## Prompts that work well
 
 - "Make `panels/volcano.py` from `data/de.csv`: log2 fold change against −log10 adjusted p, the 20 most significant
-  genes labelled, and place it as panel c, 60 by 50 mm."
+  genes labeled, and place it as panel c, 60 by 50 mm."
 - "Restyle the project for Cell: column widths, label style and minimum text size."
 - "Lay out panels a to f as a 3 by 2 grid with their legends collected at the bottom."
 - "This notebook draws twelve plots. Turn each into a panel function in `panels/`, and lay them out as figure 2."

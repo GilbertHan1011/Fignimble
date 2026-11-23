@@ -10,7 +10,7 @@ other apps.
 | `fignimble snapshot fig1.py [--dpi 150] [--dark]` | renders to `.fignimble/snapshots/fig1.png` and prints the path |
 | `fignimble info fig1.py [--json]` | every element's box in mm, the panel letters, panels' Python warnings and preflight warnings |
 | `fignimble check [fig1.py ...]` | preflight warnings of every figure; exit status 1 if there are any |
-| `fignimble export fig1.py fig1.pdf [--dpi 600]` | PDF, SVG, EPS, PNG, TIFF or JPEG, from the file's extension |
+| `fignimble export fig1.py fig1.pdf [--dpi 600]` | PDF, SVG, EPS, PNG, TIFF, JPEG or PowerPoint (.pptx), from the file's extension |
 | `fignimble table fig1.py 3 table1.docx` | a table of the figure (its element number or name) as a Word file |
 | `fignimble table data.csv table1.docx` | a CSV or TSV file as a Word table |
 | `fignimble journals` | the journal presets and their column widths |
@@ -25,7 +25,7 @@ Options of `export`:
     rasterized scatters) in PDF and EPS.
 
 `--cmyk`, `--outline`
-:   colours converted for print (PDF, EPS, TIFF, JPEG), and text turned into shapes (PDF, EPS, SVG). Both use
+:   colors converted for print (PDF, EPS, TIFF, JPEG), and text turned into shapes (PDF, EPS, SVG). Both use
     Ghostscript.
 
 `--dark`

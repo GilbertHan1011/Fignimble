@@ -38,18 +38,18 @@ opens the file in VS Code or your editor.
 ## Texts and marks inside a panel
 
 Click an axis label, a tick, a legend entry or a title inside a panel: the inspector edits that text, its size, its
-colour, bold and italic. Double-click it, or press Return, to retype it on the canvas. When the text is a string
+color, bold and italic. Double-click it, or press Return, to retype it on the canvas. When the text is a string
 literal in the panel's code, Fignimble changes it there
 (`ax.set_xlabel("UMAP 1", fontsize=9, color="#D55E00")`); otherwise it is kept as an override on the panel's line
 (`texts={...}`, `text_style={...}`), which **Back to What the Code Draws** removes.
 
 <img class="fg-shot" src="../../assets/panel-text.jpg" alt="An axis label inside a panel, selected and edited in the inspector">
 
-Select a panel and the inspector lists each colour it draws with. Change one and every line, bar or point of that
-colour follows; double-click a single mark to recolour just it. The colour is changed in the panel's code when it is
+Select a panel and the inspector lists each color it draws with. Change one and every line, bar or point of that
+color follows; double-click a single mark to recolor just it. The color is changed in the panel's code when it is
 written there once, otherwise kept as `colors={...}` on the panel's line.
 
-<img class="fg-shot" src="../../assets/recolour.jpg" alt="The colours of a panel listed in the inspector">
+<img class="fg-shot" src="../../assets/recolour.jpg" alt="The colors of a panel listed in the inspector">
 
 ## Packages a panel needs
 
@@ -93,7 +93,7 @@ project where it is, with its data, open it on the server instead: [Projects on 
 
 ## Dark mode in panel code
 
-Every figure has a [dark version](colour.md#dark-versions). Colours the style sets turn light; colours panel code
+Every figure has a [dark version](colour.md#dark-versions). Colors the style sets turn light; colors panel code
 sets itself stay as they are. Use `is_dark()` where you would write black:
 
 ```python

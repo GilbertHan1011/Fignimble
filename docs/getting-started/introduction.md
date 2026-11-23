@@ -37,11 +37,11 @@ to. All three change the same files, and Fignimble redraws within a second whene
 
 - **Automatic panel letters**, in reading order, re-lettered when panels move, styled once for every figure.
 - **Panels that redraw at their size**, so their text and lines are the size the journal sees.
-- **One style for every panel**: font, text size, line widths and colours, set in `style.py`.
+- **One style for every panel**: font, text size, line widths and colors, set in `style.py`.
 - **Journal presets** for 40 journals: column widths, fonts, label convention and the resolutions they require.
 - **Plot areas that line up** across a row or column, whatever the tick labels, as
   [patchwork](https://patchwork.data-imaginist.com) does for ggplot.
-- **Preflight**: small text, low-resolution pictures, colours colour-blind readers confuse, elements off the page.
+- **Preflight**: small text, low-resolution pictures, colors color-blind readers confuse, elements off the page.
 - **Export** to vector PDF, EPS and SVG with real text, and to TIFF, PNG and JPEG at the journal's resolution.
 - **A dark version** of every figure for talks, from the same code.
 - **An AI agent in the terminal** that knows how the project works and can look at its own renders.

@@ -5,7 +5,7 @@ does: a request `{"id": 7, "cmd": "figure", "name": "fig1"}`, a response `{"id":
 `{"id": 7, "error": "..."}`, and events with no id. The engine renders in a separate worker process
 (`fignimble.worker`), restarted if a panel's code crashes it or runs over 180 s.
 
-Coordinates are millimetres from the figure's top-left corner, y down.
+Coordinates are millimeters from the figure's top-left corner, y down.
 
 ## Commands
 

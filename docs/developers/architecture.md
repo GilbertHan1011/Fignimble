@@ -28,7 +28,7 @@ what it depends on: its code, the style, its size, and the project's other files
 
 ## Editing
 
-A canvas edit (move, resize, retype, recolour) becomes an operation that `srcedit.py` turns into the smallest change
+A canvas edit (move, resize, retype, recolor) becomes an operation that `srcedit.py` turns into the smallest change
 to the source: it finds the call through Python's syntax tree and rewrites one argument. Each edit is one undo step
 holding the files' contents before and after; undo merges line by line, so lines changed since by an agent or another
 editor are left alone.
