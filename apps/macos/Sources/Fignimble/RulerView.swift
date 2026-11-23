@@ -1,6 +1,6 @@
 import AppKit
 
-/// A ruler in millimetres along the top or left of the canvas, 0 at the figure's top-left corner, following the
+/// A ruler in millimeters along the top or left of the canvas, 0 at the figure's top-left corner, following the
 /// canvas's zoom and pan. It shows the figure's extent, the selection's and the cursor; drag from it onto the
 /// figure to add a guide. (After Manimble's RulerView.)
 final class RulerView: NSView {
@@ -43,7 +43,7 @@ final class RulerView: NSView {
             let s0 = pos(Double(horizontal ? sel.minX : sel.minY)), s1 = pos(Double(horizontal ? sel.maxX : sel.maxY))
             (horizontal ? NSRect(x: s0, y: 0, width: s1 - s0, height: bounds.height) : NSRect(x: 0, y: s0, width: bounds.width, height: s1 - s0)).fill()
         }
-        // ticks: a labelled one at least ~40 pt apart
+        // ticks: a labeled one at least ~40 pt apart
         let ppm = Double(c.scale)
         let major = [1.0, 2, 5, 10, 20, 50, 100].first { $0 * ppm >= 40 } ?? 200
         let minor = major / (major == 2 || major == 20 ? 4 : 5)

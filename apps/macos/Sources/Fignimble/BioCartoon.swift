@@ -312,7 +312,7 @@ enum BioCartoonCLI {
         return try JSONDecoder().decode(Result.self, from: try await run(exe, ["search", statement, "--sql", "--json", "--max-rows", String(maxRows)])).rows
     }
 
-    /// The licenses in the catalog with their icon counts (one per drawing: colour variants count once), for the License dropdown.
+    /// The licenses in the catalog with their icon counts (one per drawing: color variants count once), for the License dropdown.
     static func licenseCounts(_ exe: String) async throws -> [(String, Int)] {
         try await sql(exe, "SELECT a.license, count(DISTINCT coalesce(a.grp, a.source || '/' || a.title)) FROM assets a WHERE a.png_key IS NOT NULL GROUP BY a.license ORDER BY a.license")
             .compactMap { r in r.count == 2 && !r[0].string.isEmpty ? (r[0].string, r[1].int) : nil }
@@ -434,7 +434,7 @@ enum BioCartoonCLI {
         return .success(exe)
     }
 
-    /// Badge colours of the BioCartoon app, one per collection.
+    /// Badge colors of the BioCartoon app, one per collection.
     static func badgeColor(_ source: String) -> NSColor {
         switch source {
         case "bioart": return NSColor(hex: "#2F80ED")!
@@ -829,7 +829,7 @@ enum BCOffline {
         }.value
     }
 
-    /// Download `keys`, eight at a time, reporting how many are done (and failed) as they go; stops when cancelled.
+    /// Download `keys`, eight at a time, reporting how many are done (and failed) as they go; stops when canceled.
     static func download(_ keys: [String], progress: @escaping @MainActor (_ done: Int, _ failed: Int) -> Void) async -> (got: Int, failed: Int) {
         var next = 0, done = 0, failed = 0
         await withTaskGroup(of: Bool.self) { g in
@@ -1204,7 +1204,7 @@ final class BCMultiPopup: NSPopUpButton {
     }
 }
 
-/// A view painted in the window's background colour: the pane sits where the inspector's scroll view, which paints its own, was.
+/// A view painted in the window's background color: the pane sits where the inspector's scroll view, which paints its own, was.
 final class BCBackdrop: NSView {
     override func draw(_ r: NSRect) { NSColor.windowBackgroundColor.setFill(); r.fill() }
 }
@@ -1215,7 +1215,7 @@ final class BCBackdrop: NSView {
 final class BioCartoonPane: NSObject, NSCollectionViewDataSource, NSCollectionViewDelegateFlowLayout, NSSearchFieldDelegate {
     static let dragType = NSPasteboard.PasteboardType("com.manimble.biocartoon-icon")
     let view: NSView = BCBackdrop()
-    /// Insert an icon at the slide's centre (a click on its tile).
+    /// Insert an icon at the slide's center (a click on its tile).
     var onInsert: ((BCIcon) -> Void)?
     /// The × in the corner: back to the inspector.
     var onClose: (() -> Void)?

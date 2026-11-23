@@ -176,9 +176,8 @@ The app itself follows the system's light or dark appearance, or **View ▸ Appe
   real, editable Word table.
 - **Panels from an SSH server**: Insert ▸ Panel from SSH Server… lists a folder on a server (hosts from
   `~/.ssh/config`) and copies the panel code you pick into `panels/`, its first line saying where it came from;
-  right-click the panel ▸ **Update from Server** fetches it again (one undo step). It connects with your SSH key (or an
-  agent, or a connection opened in the terminal with ControlMaster); it can't ask for a password. Data the panel
-  reads on the server has to be copied too.
+  right-click the panel ▸ **Update from Server** fetches it again (one undo step). If the server asks for a password
+  or a code, Fignimble shows the question. Data the panel reads on the server has to be copied too.
 
 ## The editor
 

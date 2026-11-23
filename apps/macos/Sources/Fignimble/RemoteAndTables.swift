@@ -26,19 +26,77 @@ extension MainController {
         }
     }
 
-    /// File ▸ Export Table as Word…: the selected table as a .docx with a real Word table.
-    @objc func exportTable(_ sender: Any?) {
-        guard let name = current, canvas.selection.count == 1, let e = figure?.element(canvas.selection[0]), e.kind == "table" else { return }
-        let p = NSSavePanel()
-        p.allowedContentTypes = [UTType(filenameExtension: "docx") ?? .data]
-        let stem = ((e.s("source") ?? "table") as NSString).lastPathComponent
-        p.nameFieldStringValue = (stem as NSString).deletingPathExtension + ".docx"
-        if let proj = project { p.directoryURL = URL(fileURLWithPath: proj) }
-        p.beginSheetModal(for: window) { [weak self] r in
-            guard let self, r == .OK, let u = p.url else { return }
+    /// Insert ▸ New Table…: a table in a figure of its own (its cells in tables/<name>.csv), sized to the table,
+    /// to type into with the inspector's cells and export as a picture, Word, Excel, CSV or TSV.
+    @objc func newTable(_ sender: Any?) {
+        guard project != nil else { newProject(sender); return }
+        let a = NSAlert(); a.messageText = "New table"
+        a.informativeText = "A table in a figure of its own. Type its cells in the inspector; export it as a picture or as Word, Excel, CSV or TSV."
+        let name = NSTextField(string: "table\(figures.filter { ($0["name"] as? String ?? "").hasPrefix("table") }.count + 1)")
+        let rows = NSTextField(string: "4"), cols = NSTextField(string: "3")
+        for f in [name, rows, cols] { f.widthAnchor.constraint(equalToConstant: f === name ? 140 : 50).isActive = true }
+        let grid = NSGridView(views: [[NSTextField(labelWithString: "Name"), name],
+                                      [NSTextField(labelWithString: "Rows (with the header)"), rows],
+                                      [NSTextField(labelWithString: "Columns"), cols]])
+        grid.frame = NSRect(x: 0, y: 0, width: 300, height: 90)
+        a.accessoryView = grid; a.addButton(withTitle: "Create"); a.addButton(withTitle: "Cancel")
+        a.beginSheetModal(for: window) { [weak self] r in
+            guard let self, r == .alertFirstButtonReturn else { return }
+            if code.dirty { code.save() }
+            let args: [String: Any] = ["name": name.stringValue, "rows": max(1, min(200, Int(rows.stringValue) ?? 4)),
+                                       "cols": max(1, min(50, Int(cols.stringValue) ?? 3))]
             self.enqueue { [weak self] in guard let self else { return }
                 do {
-                    let r = try await self.engine.json("export_table", ["figure": name, "oid": e.oid, "path": u.path])
+                    let res = try await self.engine.json("new_table", args)
+                    if let n = res["name"] as? String {
+                        await self.refreshState()
+                        self.canvas.selection = []
+                        await self.loadFigure(n)
+                        if let t = self.figure?.elements.first(where: { $0.kind == "table" }) { self.canvas.selection = [t.oid] }
+                    } else if let e = res["error"] as? String { self.toast(e, error: true) }
+                } catch { self.toast(error.localizedDescription, error: true) }
+            }
+        }
+    }
+
+    /// The inspector's cells were applied: the table's file (or rows=) gets them; a figure that is only this table
+    /// is then made the table's size.
+    func applyTableCells(_ oid: String, _ rows: [[String]]) {
+        var a: [String: Any] = ["op": "table_rows", "oid": oid, "rows": rows]
+        if figure?.isTableFigure == true { a["then"] = ["op": "fit_figure", "margin": 3] }      // one undo step
+        edit(a)
+        let gen = canvas.tableDraftGeneration
+        enqueue { [weak self] in self?.canvas.clearTableDraft(gen) }
+    }
+
+    /// File ▸ Export Table…: the selected table (or a table figure's) as Word, Excel, CSV or TSV.
+    @objc func exportTable(_ sender: Any?) {
+        guard let name = current, let f = figure else { return }
+        let picked = canvas.selection.count == 1 ? f.element(canvas.selection[0]) : nil
+        guard let e = picked?.kind == "table" ? picked : (f.isTableFigure ? f.elements.first : nil) else { return }
+        let p = NSSavePanel()
+        let formats = ["docx", "xlsx", "csv", "tsv"]
+        let format = NSPopUpButton(frame: .zero, pullsDown: false)
+        format.addItems(withTitles: ["Word table (.docx)", "Excel (.xlsx)", "CSV", "TSV"])
+        let stem = (((e.s("source") ?? name) as NSString).lastPathComponent as NSString).deletingPathExtension
+        let pick = Action { _ in
+            let fmt = formats[format.indexOfSelectedItem]
+            p.allowedContentTypes = [UTType(filenameExtension: fmt) ?? .data]
+            p.nameFieldStringValue = stem + "." + fmt
+        }
+        format.target = pick; format.action = #selector(Action.fire(_:))
+        let acc = NSStackView(views: [NSTextField(labelWithString: "Format:"), format])
+        acc.edgeInsets = NSEdgeInsets(top: 8, left: 8, bottom: 8, right: 8)
+        p.accessoryView = acc
+        pick.fire(format)
+        if let proj = project { p.directoryURL = URL(fileURLWithPath: proj) }
+        p.beginSheetModal(for: window) { [weak self] r in
+            _ = pick
+            guard let self, r == .OK, let u = p.url else { return }
+            let fmt = formats[format.indexOfSelectedItem]
+            self.enqueue { [weak self] in guard let self else { return }
+                do {
+                    let r = try await self.engine.json("export_table", ["figure": name, "oid": e.oid, "path": u.path, "format": fmt])
                     if r["ok"] as? Bool == true { toast("Exported \(u.lastPathComponent)") }
                     else { toast(r["error"] as? String ?? "Couldn't export the table", error: true) }
                 } catch { toast(error.localizedDescription, error: true) }
@@ -56,6 +114,7 @@ extension MainController {
             self.enqueue { [weak self] in guard let self else { return }
                 busy("Fetching \((path as NSString).lastPathComponent) from \(host)…")
                 do {
+                    try await self.logIn(host)
                     let r = try await self.engine.json("import_remote", ["figure": name, "host": host, "path": path,
                                                                          "x": Double(f.size.width) / 2 - 30, "y": Double(f.size.height) / 2 - 22,
                                                                          "pxPerMM": self.lastPx])
@@ -63,7 +122,7 @@ extension MainController {
                     if let sel = r["select"] as? [String] { canvas.selection = sel }
                     if r["ok"] as? Bool == true { toast("Fetched \((path as NSString).lastPathComponent) from \(host) into panels/") }
                     else { toast(r["error"] as? String ?? "Couldn't fetch the panel", error: true) }
-                } catch { toast(error.localizedDescription, error: true) }
+                } catch SSH.Failure.canceled { idle() } catch { toast(error.localizedDescription, error: true) }
                 await refreshState()
             }
         }
@@ -89,25 +148,32 @@ extension MainController {
         enqueue { [weak self] in guard let self else { return }
             busy("Fetching \(from)…")
             do {
+                try await self.logIn(String(from.prefix { $0 != ":" }))
                 let r = try await self.engine.json("update_remote", ["file": src, "figure": name, "pxPerMM": self.lastPx])
                 if let fig = r["figure"] as? [String: Any] { apply(fig) }
                 if r["ok"] as? Bool == true { toast("Updated \((src as NSString).lastPathComponent) from \(from)") }
                 else { toast(r["error"] as? String ?? "Couldn't update the panel", error: true) }
-            } catch { toast(error.localizedDescription, error: true) }
+            } catch SSH.Failure.canceled { idle() } catch { toast(error.localizedDescription, error: true) }
             await refreshState()
         }
     }
 }
 
 /// Insert ▸ Panel from SSH Server…: a host (from ~/.ssh/config, or typed), a folder there, its folders and .py files.
-/// ssh can't ask for a password here, so the server must take a key (or an agent's, or a ControlMaster connection).
+/// File ▸ Open Project on SSH Server… (`.project`): the same, to open the listed folder as the project, with the
+/// Python on the server that draws it.
+/// Listing logs in first (MainController.logIn): what ssh asks is shown in a dialog.
 @MainActor
 final class RemoteDialog: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSComboBoxDelegate {
+    enum Mode { case panel, project }
     weak var main: MainController?
+    let mode: Mode
     var onImport: ((String, String) -> Void)?
+    var onOpenProject: ((RemoteProject) -> Void)?
     let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 520, height: 440), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
     private let host = NSComboBox()
     private let folder = NSTextField()
+    private let python = NSTextField()
     private let table = NSTableView()
     private let status = NSTextField(wrappingLabelWithString: "")
     private let importButton = NSButton(title: "Import", target: nil, action: nil)
@@ -115,10 +181,12 @@ final class RemoteDialog: NSObject, NSTableViewDataSource, NSTableViewDelegate, 
     private var path = ""
     private var keep: RemoteDialog?
 
-    init(main: MainController) {
+    /// `prefill`: a project to show again (Choose Another Python… after its Python lacked packages).
+    init(main: MainController, mode: Mode = .panel, prefill: RemoteProject? = nil) {
         self.main = main
+        self.mode = mode
         super.init()
-        let title = NSTextField(labelWithString: "Panel from an SSH server")
+        let title = NSTextField(labelWithString: mode == .project ? "Open a project on an SSH server" : "Panel from an SSH server")
         title.font = Theme.font(13, .semibold)
         host.placeholderString = "user@server or a Host from ~/.ssh/config"
         host.completes = true; host.delegate = self
@@ -133,24 +201,38 @@ final class RemoteDialog: NSObject, NSTableViewDataSource, NSTableViewDelegate, 
         table.rowHeight = 22; table.target = self; table.doubleAction = #selector(opened)
         let scroll = NSScrollView(); scroll.documentView = table; scroll.hasVerticalScroller = true; scroll.borderType = .bezelBorder
         status.font = Theme.font(10.5); status.textColor = .secondaryLabelColor; status.preferredMaxLayoutWidth = 480
-        status.stringValue = "Fignimble connects with your SSH key (ssh can't ask for a password here). The panel's code is copied into panels/; right-click it ▸ Update from Server to fetch it again."
+        status.stringValue = mode == .project
+            ? "The figures are drawn on the server, with its Python and data; you edit them here. List a folder, then Open. If the server asks for a password or a code, Fignimble shows the question."
+            : "The panel's code is copied into panels/; right-click it ▸ Update from Server to fetch it again. If the server asks for a password or a code, Fignimble shows the question."
         let cancel = NSButton(title: "Cancel", target: self, action: #selector(cancel)); cancel.keyEquivalent = "\u{1b}"
         importButton.target = self; importButton.action = #selector(doImport); importButton.isEnabled = false
+        if mode == .project { importButton.title = "Open" }
+        python.placeholderString = "python3, or the path of an environment's python on the server"
+        python.stringValue = RemoteProject.python(for: host.stringValue)
+        python.toolTip = "It needs matplotlib, pymupdf and pillow (Python 3.10 or newer), and whatever the panels' code imports"
         let hostRow = NSStackView(views: [NSTextField(labelWithString: "Server:"), host])
         let folderRow = NSStackView(views: [NSTextField(labelWithString: "Folder:"), folder, go])
+        let pythonRow = NSStackView(views: [NSTextField(labelWithString: "Python there:"), python])
         let buttons = NSStackView(views: [NSView(), cancel, importButton])
-        let stack = NSStackView(views: [title, hostRow, folderRow, scroll, status, buttons])
+        let rows: [NSView] = mode == .project ? [title, hostRow, folderRow, pythonRow, scroll, status, buttons]
+                                              : [title, hostRow, folderRow, scroll, status, buttons]
+        let stack = NSStackView(views: rows)
         stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 8
         stack.edgeInsets = NSEdgeInsets(top: 14, left: 16, bottom: 14, right: 16)
         stack.translatesAutoresizingMaskIntoConstraints = false
         panel.contentView = NSView()
         panel.contentView!.addSubview(stack)
-        for v in [hostRow, folderRow, scroll, status, buttons] { v.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -32).isActive = true }
+        for v in rows where v !== title { v.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -32).isActive = true }
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: panel.contentView!.leadingAnchor), stack.trailingAnchor.constraint(equalTo: panel.contentView!.trailingAnchor),
             stack.topAnchor.constraint(equalTo: panel.contentView!.topAnchor), stack.bottomAnchor.constraint(equalTo: panel.contentView!.bottomAnchor),
             scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 200),
         ])
+        if let p = prefill {
+            host.stringValue = p.host; folder.stringValue = p.path; python.stringValue = p.python
+            status.stringValue = "Type the path of a Python on \(p.host) that has matplotlib, pymupdf and pillow (Python 3.10 or newer), then Open."
+            DispatchQueue.main.async { [weak self] in self?.list(); self?.panel.makeFirstResponder(self?.python) }
+        }
         Task { @MainActor in
             let r = (try? await main.engine.json("remote_hosts", [:])) ?? [:]
             let known = Set(host.objectValues.compactMap { $0 as? String })
@@ -175,6 +257,11 @@ final class RemoteDialog: NSObject, NSTableViewDataSource, NSTableViewDelegate, 
         status.stringValue = "Listing \(where_.isEmpty ? "the home folder" : where_) on \(h)…"
         importButton.isEnabled = false
         Task { @MainActor in
+            do { try await m.logIn(h) } catch {
+                status.stringValue = { if case SSH.Failure.canceled = error { return "Canceled." } else { return "Couldn't log in to \(h): " + error.localizedDescription } }()
+                status.textColor = .systemRed
+                return
+            }
             let r = (try? await m.engine.json("remote_list", ["host": h, "path": where_])) ?? ["ok": false, "error": "no answer"]
             guard r["ok"] as? Bool == true else {
                 status.stringValue = "Couldn't list it: " + (r["error"] as? String ?? "")
@@ -188,7 +275,10 @@ final class RemoteDialog: NSObject, NSTableViewDataSource, NSTableViewDelegate, 
             if path != "/" { entries.insert(("..", true), at: 0) }
             table.reloadData()
             let n = entries.filter { !$0.dir }.count
-            status.stringValue = "\(h):\(path): \(n) Python file\(n == 1 ? "" : "s"). Double-click a folder to open it, a .py file to import it."
+            status.stringValue = mode == .project
+                ? "\(h):\(path): \(n) Python file\(n == 1 ? "" : "s"). Double-click a folder to go into it; Open opens this one as the project."
+                : "\(h):\(path): \(n) Python file\(n == 1 ? "" : "s"). Double-click a folder to open it, a .py file to import it."
+            if mode == .project { importButton.isEnabled = true }
             var recent = UserDefaults.standard.stringArray(forKey: "sshHosts") ?? []
             recent.removeAll { $0 == h }; recent.insert(h, at: 0)
             UserDefaults.standard.set(Array(recent.prefix(10)), forKey: "sshHosts")
@@ -204,10 +294,19 @@ final class RemoteDialog: NSObject, NSTableViewDataSource, NSTableViewDelegate, 
     @objc private func opened() {
         let r = table.clickedRow
         guard r >= 0, r < entries.count else { return }
-        if entries[r].dir { load(child(entries[r].name)) } else { doImport() }
+        if entries[r].dir { load(child(entries[r].name)) } else if mode == .panel { doImport() }
     }
 
     @objc private func doImport() {
+        if mode == .project {
+            let h = host.stringValue.trimmingCharacters(in: .whitespaces)
+            guard !h.isEmpty, !path.isEmpty else { return }
+            let py = python.stringValue.trimmingCharacters(in: .whitespaces)
+            RemoteProject.remember(python: py.isEmpty ? "python3" : py, for: h)
+            main?.window.endSheet(panel)
+            onOpenProject?(RemoteProject(host: h, path: path, python: py.isEmpty ? "python3" : py))
+            return
+        }
         let r = table.selectedRow
         guard r >= 0, r < entries.count, !entries[r].dir else { return }
         let h = host.stringValue.trimmingCharacters(in: .whitespaces), p = child(entries[r].name)
@@ -218,6 +317,9 @@ final class RemoteDialog: NSObject, NSTableViewDataSource, NSTableViewDelegate, 
     func comboBoxSelectionDidChange(_ n: Notification) {
         DispatchQueue.main.async { [self] in
             folder.stringValue = UserDefaults.standard.string(forKey: "sshFolder:" + host.stringValue) ?? ""
+            python.stringValue = RemoteProject.python(for: host.stringValue)
+            path = ""
+            if mode == .project { importButton.isEnabled = false }
         }
     }
 
@@ -234,6 +336,7 @@ final class RemoteDialog: NSObject, NSTableViewDataSource, NSTableViewDelegate, 
         return cell
     }
     func tableViewSelectionDidChange(_ n: Notification) {
+        guard mode == .panel else { return }
         let r = table.selectedRow
         importButton.isEnabled = r >= 0 && r < entries.count && !entries[r].dir
     }

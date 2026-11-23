@@ -44,7 +44,7 @@ def _params(fn) -> list[str]:
 # positional parameter names of every call an edit can change, by callee
 PARAMS = {name: _params(getattr(api.Figure, name)) for name in
           ("panel", "image", "text", "line", "arrow", "rect", "ellipse", "bracket", "guide", "layout", "inset",
-           "legend", "path", "zoom", "scalebar", "table")}
+           "legend", "path", "zoom", "scalebar", "table", "caption")}
 PARAMS.update({"Figure": _params(api.Figure.__init__), "Labels": _params(api.Labels.__init__),
                "Style": _params(api.Style.__init__), "Labels.journal": ["name"], "Style.journal": ["name"]})
 PARAMS.update({n: _params(getattr(api, n).__init__) for n in ("Panel", "Image", "Spacer", "Row", "Column", "Grid",
@@ -69,13 +69,13 @@ def callee(call: ast.Call) -> str | None:
 
 
 def fmt(v) -> str:
-    """A value as Python source: millimetres rounded to 0.01, fractions to 0.0001."""
+    """A value as Python source: millimeters rounded to 0.01, fractions to 0.0001."""
     if isinstance(v, Raw):
         return v.text
     if v is None or isinstance(v, bool):
         return repr(v)
     if isinstance(v, (int, float)):
-        # millimetres to 0.01; fractions (crops, regions, insets) to 0.0001
+        # millimeters to 0.01; fractions (crops, regions, insets) to 0.0001
         r = round(float(v), 4 if abs(v) < 1 else 2)
         if r == int(r):
             return str(int(r))
@@ -90,6 +90,14 @@ def fmt(v) -> str:
     if isinstance(v, dict):
         return "{" + ", ".join(f"{fmt(k)}: {fmt(x)}" for k, x in v.items()) + "}"
     raise EditError(f"can't write {v!r} as code")
+
+
+def text_literal(text: str) -> str:
+    """A string as Python source, as a triple-quoted block when it has several lines (a caption) so it reads as
+    written."""
+    if "\n" in text and '"""' not in text and "\\" not in text and not text.endswith('"') and "\r" not in text:
+        return '"""' + text + '"""'
+    return fmt(text)
 
 
 def is_literal(node: ast.AST) -> bool:

@@ -43,7 +43,7 @@ logging.getLogger("matplotlib.font_manager").setLevel(logging.ERROR)
 sys.dont_write_bytecode = True          # running a project's code leaves no __pycache__ in it
 pymupdf.TOOLS.mupdf_display_errors(False)
 
-MM = 72 / 25.4                     # points per millimetre
+MM = 72 / 25.4                     # points per millimeter
 RASTER = (".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".gif", ".webp")
 VECTOR = (".pdf", ".svg")
 SKIP_DIRS = {".fignimble", ".git", "__pycache__", ".venv", "venv", "node_modules", ".ipynb_checkpoints"}
@@ -322,13 +322,14 @@ class Renderer:
         return str(out), r.width / MM, r.height / MM
 
     def table_piece(self, rows: list, header: bool, size: float, family: list, color: str, width: float | None,
-                    decimals=None, align=None) -> tuple[str, float, float]:
+                    decimals=None, align=None, grid: bool = False) -> tuple[str, float, float]:
         """(pdf, w mm, h mm) of a table: columns as wide as their text (widened evenly to `width`), numbers to the
-        right, a rule above and below the header and at the bottom."""
+        right, a rule above and below the header and at the bottom (`grid`: a line between every row and column and
+        around the table)."""
         color = self.c(color)
         shown, auto = tables.cells(rows, header, decimals)
         al = tables.resolve_align(align, auto)
-        key = _h("table", shown, al, header, size, family, color, width)
+        key = _h("table2", shown, al, header, size, family, color, width, bool(grid))
         out = self.cache / "pieces" / f"{key}.pdf"
         meta = out.with_suffix(".json")
         if not (out.exists() and meta.exists()):
@@ -346,7 +347,8 @@ class Renderer:
                             t = fig.text(0, 0, c, fontsize=size, fontweight="bold" if header and i == 0 else "normal")
                             cw[j] = max(cw[j], t.get_window_extent(r).width)
                             t.remove()
-                cw = [c + 2 * pad for c in cw]
+                # an empty column (a new table, still to be typed into) is still wide enough to click and type in
+                cw = [max(c, size * 4.5) + 2 * pad for c in cw]
                 W = sum(cw) or 10.0
                 if width and width * MM > W:
                     cw = [c + (width * MM - W) / max(n, 1) for c in cw]
@@ -362,20 +364,33 @@ class Renderer:
                                  ha={"l": "left", "c": "center", "r": "right"}[al[j]],
                                  fontweight="bold" if header and i == 0 else "normal")
                 lines = [(rule / 2, rule), (H - rule / 2, rule)]
-                if header and len(shown) > 1:
+                if grid:
+                    lines += [(rule + rh * i, rule * 0.6) for i in range(1, len(shown))]
+                elif header and len(shown) > 1:
                     lines.append((rule + rh, rule * 0.6))
                 for y, lw in lines:
                     fig.add_artist(matplotlib.lines.Line2D([0, 1], [1 - y / H] * 2, transform=fig.transFigure,
                                                            color=color, linewidth=lw, solid_capstyle="butt"))
+                if grid:                                  # the columns' dividers, and the table's sides
+                    for k, x in enumerate(xs[1:] + [0.0, W]):
+                        x = min(max(x, rule / 2), W - rule / 2)
+                        lw = rule if k >= n - 1 else rule * 0.6
+                        fig.add_artist(matplotlib.lines.Line2D([x / W] * 2, [0, 1], transform=fig.transFigure,
+                                                               color=color, linewidth=lw, solid_capstyle="butt"))
                 buf = io.BytesIO()
                 fig.savefig(buf, format="pdf", transparent=True)
             _write(out, buf.getvalue())
-            meta.write_text(json.dumps({"w": W / MM, "h": H / MM}))
+            meta.write_text(json.dumps({"w": W / MM, "h": H / MM,
+                                        # where each cell is (mm from the table's top-left), for typing into it
+                                        "cols": [[round(x / MM, 3), round(c / MM, 3)] for x, c in zip(xs, cw)],
+                                        "rows": [[round((rule + rh * i) / MM, 3), round(rh / MM, 3)]
+                                                 for i in range(len(shown))]}))
         m = json.loads(meta.read_text())
+        self.last_table_grid = {"cols": m.get("cols", []), "rows": m.get("rows", [])}
         return str(out), m["w"], m["h"]
 
     def c(self, color):
-        """A colour as drawn: in dark mode, greys (black text and lines) turn light and light greys dark."""
+        """A color as drawn: in dark mode, grays (black text and lines) turn light and light grays dark."""
         if color is None or not self.dark:
             return color
         try:
@@ -650,8 +665,10 @@ class Renderer:
                     fam = [p["font"]] + family if p["font"] else family
                     rows = p["rows"] if p.get("rows") is not None else tables.read_rows(self.resolve(p["source"]))
                     pdf, w, h = self.table_piece(rows, p["header"], size, fam, p["color"], p.get("w"),
-                                                 p.get("decimals"), p.get("align"))
+                                                 p.get("decimals"), p.get("align"), p.get("grid", False))
                     box = (p["x"], p["y"], w, h)
+                    info["props"]["cells"] = _jsonable([list(r) for r in rows])      # for the editor's cell grid
+                    info["grid"] = getattr(self, "last_table_grid", None)
                     steps.append(_pdf_piece(self, oid, "table", box, pdf, meta={"pdf": pdf, "scale": 1.0, "size": size}))
                 elif e.kind == "legend":
                     pdf, w, h = self.legend_piece(_legend_entries(p), rc, p["title"], p["ncol"], p["size"])
@@ -752,7 +769,7 @@ class Renderer:
                 if base.get("warnings"):
                     info["pyWarnings"] = base["warnings"]
                 info["aligned"] = targets.get(oid)
-                if not rot:                             # where its texts and marks are, to retype and recolour them
+                if not rot:                             # where its texts and marks are, to retype and recolor them
                     info["texts"] = [{**t, "box": [round(box[0] + t["box"][0], 3), round(box[1] + t["box"][1], 3),
                                                    round(t["box"][2], 3), round(t["box"][3], 3)]} for t in texts]
                     info["marks"] = [{**m, "box": [round(box[0] + m["box"][0], 3), round(box[1] + m["box"][1], 3),
@@ -911,7 +928,10 @@ class Renderer:
             if isinstance(e.get("label"), str) and e["label"] != "auto":
                 names[oid] = e["label"]
         # where each label goes: panel corner + the shared offset, lined up by rows and columns, then its own nudge
-        base = {oid: [box[0] + lp["dx"], box[1] + lp["dy"]] for e, oid, box in panels if oid in names}
+        # a label unhooked from its panel (label_x/label_y) stays where it was put, out of the lining up
+        free = {oid for e, oid, box in panels if oid in names and e.get("label_x") is not None
+                and e.get("label_y") is not None}
+        base = {oid: [box[0] + lp["dx"], box[1] + lp["dy"]] for e, oid, box in panels if oid in names and oid not in free}
         if lp["align"] and base:
             for axis in (1, 0):
                 keys = sorted(base, key=lambda k: base[k][axis])
@@ -931,13 +951,17 @@ class Renderer:
             if oid not in names:
                 continue
             pdf, w, h = self.text_piece(names[oid], lp["size"], lp["weight"], lp["style"], lp["color"], 0, fam)
-            x = base[oid][0] + (e.get("label_dx") or 0)
-            y = base[oid][1] + (e.get("label_dy") or 0)
+            if oid in free:
+                x, y = float(e["label_x"]), float(e["label_y"])
+            else:
+                x = base[oid][0] + (e.get("label_dx") or 0)
+                y = base[oid][1] + (e.get("label_dy") or 0)
             lb = (x, y, w, h)
             loid = f"L{oid}"
             pieces.append(_pdf_piece(self, loid, "label", lb, pdf, meta={"pdf": pdf, "scale": 1.0, "size": lp["size"]}))
             infos.append({"oid": loid, "kind": "label", "panel": oid, "text": names[oid],
-                          "auto": e.get("label") == "auto", "box": [round(v, 4) for v in lb]})
+                          "auto": e.get("label") == "auto", "detached": oid in free,
+                          "box": [round(v, 4) for v in lb]})
         return pieces, infos
 
     def compose(self, fig: api.Figure, pieces: list[Piece]) -> pymupdf.Document:
@@ -1008,6 +1032,7 @@ class Renderer:
             "elements": infos,
             "labels": labels,
             "guides": [{"x": g["x"], "y": g["y"], "site": g["site"]} for g in fig.guides],
+            "caption": {"text": fig.caption_text, "site": fig.caption_site},
             "warnings": self.preflight(fig, pieces, infos, labels),
             "thumb": str(thumb),
             "pxPerMM": px_per_mm,
@@ -1076,14 +1101,14 @@ class Renderer:
                 warn.append({"level": "warning", "oid": info["oid"],
                              "message": f"{who(info.get('panel', info['oid']))}"
                                         f"{' label' if info['kind'] == 'label' else ''} reaches outside the figure"})
-        for w_ in _colour_vision(infos, fig):
+        for w_ in _color_vision(infos, fig):
             if w_["oid"] is not None:
                 w_["message"] = who(w_["oid"]) + w_["message"][w_["message"].index(":"):]
             warn.append(w_)
         seen = {}
         for l in labels:
             if l["text"] in seen:
-                warn.append({"level": "warning", "oid": l["oid"], "message": f"two panels are labelled {l['text']}"})
+                warn.append({"level": "warning", "oid": l["oid"], "message": f"two panels are labeled {l['text']}"})
             seen[l["text"]] = 1
         j = _journal_info(fig)
         if j and not j["fits"]:
@@ -1109,8 +1134,8 @@ class Renderer:
 
     def export(self, file: str, path: str, fmt: str | None = None, dpi: int = 600, dark: bool = False,
                cmyk: bool = False, outline: bool = False, journal: str | None = None) -> dict:
-        """Write the figure to `path` as PDF, SVG, EPS, PNG, TIFF or JPEG (`dark`: its dark version). `cmyk`
-        converts colours for print (PDF, EPS, TIFF, JPEG); `outline` turns text into shapes (PDF, EPS, SVG).
+        """Write the figure to `path` as PDF, SVG, EPS, PNG, TIFF, JPEG or PPTX (`dark`: its dark version). `cmyk`
+        converts colors for print (PDF, EPS, TIFF, JPEG); `outline` turns text into shapes (PDF, EPS, SVG).
         PDF/EPS conversions use Ghostscript.
 
         `dpi` is the resolution of everything drawn as pixels: the whole figure for TIFF, JPEG and PNG; for PDF and
@@ -1177,8 +1202,20 @@ class Renderer:
                 im.save(path, dpi=(used, used), compression="tiff_lzw")
             else:
                 im.save(path, dpi=(used, used), quality=95)
+        elif fmt == "pptx":
+            from . import slides
+            z = used / 72
+            pix = doc[0].get_pixmap(matrix=pymupdf.Matrix(z, z), alpha=not self.c(fig.props["background"]))
+            slides.write_pptx(path, pix.tobytes("png"), fig.width, fig.height,
+                              svg=doc[0].get_svg_image(text_as_path=True), title=Path(file).stem,
+                              alt=fig.caption_text)
         else:
-            raise ValueError(f"can't export {fmt}; use pdf, svg, eps, png, tiff or jpg")
+            raise ValueError(f"can't export {fmt}; use pdf, svg, eps, png, tiff, jpg or pptx")
+        if fmt == "pptx":
+            return {"ok": True, "path": str(Path(path).resolve()), "format": fmt,
+                    "resolution": {"dpi": used, "notes": notes},
+                    "warnings": [f"element {i['oid']} failed: {i['error'].strip().splitlines()[-1]}"
+                                 for i in infos if i.get("error")]}
         res = self._check_resolution(path, fmt, fig, pieces, need, kind, journal)
         res["notes"] = notes + res.get("notes", [])
         errors = [i for i in infos if i.get("error")]
@@ -1511,7 +1548,7 @@ def _take_legends(fig) -> list:
 
 
 def _legend_entries(p: dict) -> list:
-    """fig.legend's {label: colour or settings} as entries."""
+    """fig.legend's {label: color or settings} as entries."""
     out = []
     for label, v in p["entries"].items():
         e = {"label": str(label)}
@@ -1749,7 +1786,7 @@ _TEXT_PROPS = {"size": "fontsize", "color": "color", "weight": "fontweight", "st
 
 
 def _set_text_style(fig, styles, ticks: bool) -> bool:
-    """Give texts the editor restyled their size, colour, weight and slant (tick labels after a first draw)."""
+    """Give texts the editor restyled their size, color, weight and slant (tick labels after a first draw)."""
     if not styles:
         return False
     arts = _text_artists(fig)
@@ -2018,7 +2055,7 @@ def _to_cmyk(im):
 
 
 def _color_artists(fig) -> dict:
-    """The coloured marks of a panel by a stable key: ax0.line1, ax0.coll0 (scatters, fills), ax0.patch3 (bars)."""
+    """The colored marks of a panel by a stable key: ax0.line1, ax0.coll0 (scatters, fills), ax0.patch3 (bars)."""
     out = {}
     for i, ax in enumerate(fig.axes):
         if hasattr(ax, "_colorbar"):
@@ -2033,7 +2070,7 @@ def _color_artists(fig) -> dict:
 
 
 def _artist_color(a):
-    """The single colour of a mark as #RRGGBB, or None (colour-mapped, invisible)."""
+    """The single color of a mark as #RRGGBB, or None (color-mapped, invisible)."""
     from matplotlib.collections import Collection
     from matplotlib.lines import Line2D
     from matplotlib.patches import Patch
@@ -2045,12 +2082,12 @@ def _artist_color(a):
                 return None
             if line:
                 return mcolors.to_hex(a.get_color())
-            # markers only (error-bar caps, dots): the colour they are drawn in
+            # markers only (error-bar caps, dots): the color they are drawn in
             unfilled = str(a.get_marker()) in "_|x+1234" or a.get_markerfacecolor() in ("none", "None")
             return mcolors.to_hex(a.get_markeredgecolor() if unfilled else a.get_markerfacecolor())
         if isinstance(a, Collection):
             if a.get_array() is not None and len(a.get_array()) > 1:
-                return None                              # colour-mapped
+                return None                              # color-mapped
             fc = a.get_facecolor()
             if len(fc) == 0 or all(c[3] == 0 for c in fc):
                 fc = a.get_edgecolor()
@@ -2067,7 +2104,7 @@ def _artist_color(a):
 
 
 def _set_colors(fig, colors):
-    """Recolour marks the editor recoloured (and the legend's swatches of the same colour)."""
+    """Recolor marks the editor recolored (and the legend's swatches of the same color)."""
     if not colors:
         return
     from matplotlib.collections import Collection
@@ -2106,7 +2143,7 @@ def _set_colors(fig, colors):
 
 
 def _measure_marks(fig, h) -> list:
-    """The panel's coloured marks: [{key, color, box (mm in the panel)}]."""
+    """The panel's colored marks: [{key, color, box (mm in the panel)}]."""
     r = fig.canvas.get_renderer()
     out = []
     for k, a in _color_artists(fig).items():
@@ -2126,7 +2163,7 @@ def _measure_marks(fig, h) -> list:
     return out[:600]
 
 
-# colour vision deficiencies (Machado et al. 2009, severity 1), applied in linear RGB
+# color vision deficiencies (Machado et al. 2009, severity 1), applied in linear RGB
 _CVD = {
     "deuteranopia": ((0.367322, 0.860646, -0.227968), (0.280085, 0.672501, 0.047413), (-0.011820, 0.042940, 0.968881)),
     "protanopia": ((0.152286, 1.052583, -0.204868), (0.114503, 0.786281, 0.099216), (-0.003882, -0.048116, 1.051998)),
@@ -2158,14 +2195,14 @@ def _seen_as(color: str, kind: str):
     return tuple(min(1.0, max(0.0, sum(m[i][j] * lin[j] for j in range(3)))) for i in range(3))
 
 
-def _colourful(c: str) -> bool:
+def _colorful(c: str) -> bool:
     r, g, b = mcolors.to_rgb(c)
     return max(r, g, b) - min(r, g, b) > 0.12
 
 
 def _clashes(colors) -> list:
-    """Pairs of colours that most people tell apart but some can't: [(a, b, [deficiencies])]."""
-    cs = sorted({c.upper() for c in colors if c and _colourful(c)})
+    """Pairs of colors that most people tell apart but some can't: [(a, b, [deficiencies])]."""
+    cs = sorted({c.upper() for c in colors if c and _colorful(c)})
     out = []
     for i, a in enumerate(cs):
         for b in cs[i + 1:]:
@@ -2178,8 +2215,8 @@ def _clashes(colors) -> list:
     return out
 
 
-def _colour_vision(infos, fig) -> list:
-    """Preflight: colours in a panel (or among the annotations) that look alike to colour-blind readers."""
+def _color_vision(infos, fig) -> list:
+    """Preflight: colors in a panel (or among the annotations) that look alike to color-blind readers."""
     warn = []
     for info in infos:
         marks = info.get("marks") or []
@@ -2188,7 +2225,7 @@ def _colour_vision(infos, fig) -> list:
         for a, b, kinds in _clashes(m["color"] for m in marks)[:3]:
             warn.append({"level": "warning", "oid": info["oid"], "colors": [a, b],
                          "message": f"{info.get('kind')} {info['oid']}: {a} and {b} look alike with "
-                                    f"{', '.join(kinds)}; use a colour-blind-safe palette or tell them apart another way"})
+                                    f"{', '.join(kinds)}; use a color-blind-safe palette or tell them apart another way"})
     notes = [e["props"].get(k) for e in infos if e["kind"] in ("text", "line", "rect", "ellipse", "path", "bracket")
              for k in ("color", "stroke", "fill") if isinstance(e["props"].get(k), str)]
     for a, b, kinds in _clashes(notes)[:3]:

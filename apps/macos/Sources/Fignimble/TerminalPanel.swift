@@ -329,7 +329,7 @@ final class TerminalSession: NSView, LocalProcessTerminalViewDelegate {
         super.init(frame: frame)
         wantsLayer = true
         term.processDelegate = self
-        // the terminal keeps resolved RGB colours, so set them again on a light/dark switch
+        // the terminal keeps resolved RGB colors, so set them again on a light/dark switch
         Theme.layerColors(self) { s in
             s.layer?.backgroundColor = Theme.codeBackground.cgColor
             let fg = Theme.dynamic(light: NSColor(white: 0.12, alpha: 1), dark: NSColor(white: 0.9, alpha: 1))
@@ -363,6 +363,13 @@ final class TerminalSession: NSView, LocalProcessTerminalViewDelegate {
         if let py = TerminalSession.python { env["FIGNIMBLE_PYTHON"] = py }
         let extra = [TerminalSession.fignimbleBin, NSHomeDirectory() + "/.local/bin", "/opt/homebrew/bin", "/usr/local/bin"]
         env["PATH"] = (extra + (env["PATH"] ?? "/usr/bin:/bin").split(separator: ":").map(String.init)).joined(separator: ":")
+        if let r = TerminalSession.remote {
+            // a project on a server: a shell there, in its folder (agents there edit the files the engine draws)
+            term.startProcess(executable: "/usr/bin/ssh", args: ["-t"] + SSH.shareOptions + [r.host, "cd \(r.shellPath) && exec \"$SHELL\" -l"],
+                              environment: env.map { "\($0.key)=\($0.value)" }, execName: nil, currentDirectory: dir)
+            onTitle?()
+            return
+        }
         let shell = env["SHELL"] ?? "/bin/zsh"
         term.startProcess(executable: shell, args: ["-l"], environment: env.map { "\($0.key)=\($0.value)" },
                           execName: "-" + (shell as NSString).lastPathComponent, currentDirectory: dir)
@@ -372,6 +379,8 @@ final class TerminalSession: NSView, LocalProcessTerminalViewDelegate {
     func terminate() { if started { term.terminate() } }
     /// The Python the engine runs on, for the `fignimble` command in the terminals.
     static var python: String?
+    /// The server the open project is on: the terminals are shells there.
+    static var remote: RemoteProject?
     /// The folder with the `fignimble` command: in the app, or the checkout's bin/.
     static var fignimbleBin: String {
         if let r = Bundle.main.resourcePath, FileManager.default.fileExists(atPath: r + "/bin/fignimble") { return r + "/bin" }

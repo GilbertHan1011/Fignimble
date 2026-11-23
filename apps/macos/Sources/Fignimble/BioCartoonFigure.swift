@@ -64,7 +64,7 @@ extension MainController {
     }
 
     /// Download the icon into the project's images/ folder (SVG when it is published as one, else PNG) and place it
-    /// centred on `point` (mm; nil = the figure's centre), 25 mm on its longer side, with no panel letter.
+    /// centered on `point` (mm; nil = the figure's center), 25 mm on its longer side, with no panel letter.
     func insertBioCartoon(_ icon: BCIcon, at point: CGPoint?) {
         guard let project, let f = figure, let exe = biocartoonPane?.exe else { return }
         let images = URL(fileURLWithPath: project).appendingPathComponent("images")

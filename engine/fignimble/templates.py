@@ -32,6 +32,16 @@ fig = Figure(width={width:g}, height={height:g}, style=STYLE)
 '''
 
 
+def table_figure_py(source: str, width: float, height: float) -> str:
+    """A figure that is a table: its cells are in `source` (a CSV in the project)."""
+    return f'''from fignimble import *
+from style import STYLE
+
+fig = Figure(width={width:g}, height={height:g}, style=STYLE)
+fig.table("{source}", x=3, y=3, grid=True)
+'''
+
+
 def panel_py(name: str = "panel") -> str:
     return '''"""A panel: draw(fig) gets a matplotlib Figure exactly the panel's size. Fonts, text sizes and line widths come
 from the project's style, so leave them out here and every panel will match."""
@@ -81,7 +91,7 @@ Fignimble and is not part of the project; don't edit it.)
 ## How a project is laid out
 
 - **Figure files** are the top-level `.py` files that make a `Figure` (`fig1.py`, `fig2.py`, ...). Each places
-  elements on its figure, one call per element. Units are **millimetres**, from the figure's **top-left corner, y
+  elements on its figure, one call per element. Units are **millimeters**, from the figure's **top-left corner, y
   pointing down**.
 - **Panels** are drawn by Python files, usually in `panels/`. A panel file has a function `draw(fig, ...)` that gets
   a matplotlib `Figure` of exactly the panel's size (`fig.add_subplot()`, `fig.subplots(2, 2)`, `fig.colorbar(...)`
@@ -94,7 +104,7 @@ from fignimble import *
 from style import STYLE
 
 fig = Figure(width=183, height=120, style=STYLE)
-fig.panel("panels/expression.py", x=2, y=2, w=88, h=55)           # labelled a automatically
+fig.panel("panels/expression.py", x=2, y=2, w=88, h=55)           # labeled a automatically
 fig.image("images/gel.png", x=93, y=2, w=88)                       # pictures are panels too (b); h follows aspect
 fig.text("Treated", x=40, y=60, size=7, weight="bold", align="center")
 fig.arrow(60, 70, 80, 70)                       # also fig.line, fig.rect, fig.ellipse, fig.bracket(x1, x2, y, "**")
@@ -120,17 +130,17 @@ sizes. Panels on the figure are lined up the same way whenever they share an edg
 this off). Prefer a layout for regular grids of plots, and free `fig.panel(...)` for figures arranged by hand.
 
 Every figure also has a **dark version** for talks (`fignimble snapshot fig1.py --dark`): fignimble turns the style's
-text and axes white and the background black. Colours panel code sets itself stay as they are, so in panel code
+text and axes white and the background black. Colors panel code sets itself stay as they are, so in panel code
 use `"white" if is_dark() else "black"` (from fignimble) wherever you would write black.
 
 Annotations: `fig.text("**bold** *italic* 10^{3} CD8_{a}", width=60)` (markup; `width` wraps), `fig.arrow(...,
 curve=0.3, tip="stealth")`, `fig.path(points, smooth=True, closed=True, fill=...)`, `fig.scalebar(picture, length=50,
 unit="µm", pixel_size=0.325)`, `fig.zoom(picture, inset, region=(x, y, w, h))` (fractions; the inset of the same
 picture is cropped to the region). Pictures take `rotation=` and `flip="h"`. `Style(palette={"WT": "#999999", ...})`
-sets the colours panels plot with (or a named one: `palette="okabe-ito"`, colour-blind safe); use `color("WT")` in
-panel code rather than repeating hex codes, and keep colour-blind readers in mind (`fignimble info` warns about colours
+sets the colors panels plot with (or a named one: `palette="okabe-ito"`, color-blind safe); use `color("WT")` in
+panel code rather than repeating hex codes, and keep color-blind readers in mind (`fignimble info` warns about colors
 they can't tell apart). A panel's `texts={"ax0.xlabel": "..."}`, `text_style={"ax0.legend0": {"size": 8, "color": "#...", "weight": "bold"}}`
-and `colors={"ax0.line1": "#..."}` hold texts, text settings and colours the user changed on the canvas: leave them alone, or move them into the panel's code and remove the entries. `locked=True` / `hidden=True` are the user's layer settings: keep them.
+and `colors={"ax0.line1": "#..."}` hold texts, text settings and colors the user changed on the canvas: leave them alone, or move them into the panel's code and remove the entries. `locked=True` / `hidden=True` are the user's layer settings: keep them.
 
 Panels may import any package. List those beyond matplotlib and numpy in the project's `requirements.txt` (pip's
 format), and Fignimble offers to install them when the project opens. Slow work several panels share (loading and

@@ -394,7 +394,7 @@ def test_panel_text_only_for_panels(session):
     assert not r["ok"] and "only the texts of a panel" in r["error"]
 
 
-def test_palettes_and_colour_vision(session):
+def test_palettes_and_color_vision(session):
     r = session.render("fig1")
     assert any("deuteranopia" in w["message"] for w in r["warnings"])          # matplotlib's default red and green
     edit(session, op="style", props={"palette": "okabe-ito"})
@@ -405,12 +405,12 @@ def test_palettes_and_colour_vision(session):
     session.undo({"figure": "fig1"})
 
 
-def test_recolour_panel_marks(session):
+def test_recolor_panel_marks(session):
     r = session.render("fig1")
     bars = next(e for e in r["elements"] if e["oid"] == "5")
     red = [m["key"] for m in bars["marks"] if m["color"] == "#D1495B"]
     assert red == ["ax0.patch2", "ax0.patch3"]
-    # the colour is written twice in the code (two bars): an override for those marks
+    # the color is written twice in the code (two bars): an override for those marks
     edit(session, op="panel_color", oid="5", keys=red, color="#0072B2", old="#D1495B")
     t = fig_text(session)
     assert 'colors={"ax0.patch2": "#0072B2", "ax0.patch3": "#0072B2"}' in t
@@ -757,3 +757,84 @@ def test_svg_style_sheet_is_drawn(tmp_path):
     pix = pymupdf.open(_pdf(tmp_path))[0].get_pixmap(dpi=72)
     assert pix.pixel(pix.width // 4, pix.height // 2)[:3] == (255, 0, 0)          # the sheet's red, not black
     assert pix.pixel(pix.width * 3 // 4, pix.height // 2)[:3] == (255, 255, 255)  # fill:none beats fill="#00FF00"
+
+
+def test_label_unlinked_from_panel(session):
+    s = session
+    r = s.render("fig1")
+    lab = r["labels"][0]
+    panel = lab["panel"]
+    edit(s, op="label_detach", oid=lab["oid"], detach=True)
+    assert "label_x=" in fig_text(s)
+    # the panel moves, its unlinked label stays
+    r = edit(s, op="move", oids=[panel], dx=5, dy=0)
+    l2 = next(l for l in r["figure"]["labels"] if l["oid"] == lab["oid"])
+    assert l2["detached"] and l2["box"][:2] == lab["box"][:2]
+    # the label moves alone
+    r = edit(s, op="move", oids=[lab["oid"]], dx=2, dy=1)
+    l3 = next(l for l in r["figure"]["labels"] if l["oid"] == lab["oid"])
+    assert abs(l3["box"][0] - lab["box"][0] - 2) < 0.01 and abs(l3["box"][1] - lab["box"][1] - 1) < 0.01
+    # linked again it keeps its place, and follows the panel
+    r = edit(s, op="label_detach", oid=lab["oid"], detach=False)
+    l4 = next(l for l in r["figure"]["labels"] if l["oid"] == lab["oid"])
+    assert not l4["detached"] and "label_x=" not in fig_text(s)
+    r = edit(s, op="move", oids=[panel], dx=-5, dy=0)
+    l5 = next(l for l in r["figure"]["labels"] if l["oid"] == lab["oid"])
+    assert abs(l5["box"][0] - (l4["box"][0] - 5)) < 0.01
+    for _ in range(5):
+        s.undo({"figure": "fig1"})
+
+
+def test_caption(session):
+    s = session
+    r = edit(s, op="caption", text="Figure 1 | Expression.\nSecond line.")
+    assert r["figure"]["caption"]["text"] == "Figure 1 | Expression.\nSecond line."
+    assert 'fig.caption("""Figure 1' in fig_text(s)
+    r = edit(s, op="caption", text="Shorter")
+    assert r["figure"]["caption"]["text"] == "Shorter" and fig_text(s).count("fig.caption(") == 1
+    r = edit(s, op="caption", text="")
+    assert r["figure"]["caption"]["text"] is None and "fig.caption(" not in fig_text(s)
+    for _ in range(3):
+        s.undo({"figure": "fig1"})
+
+
+def test_new_table_cells_and_exports(session, tmp_path):
+    import zipfile
+    s = session
+    t = s.new_table({"name": "Table 1", "rows": 3, "cols": 2})
+    assert t["ok"]
+    name = t["name"]
+    r = s.render(name)
+    tb = next(e for e in r["elements"] if e["kind"] == "table")
+    assert tb["props"]["cells"] == [["", ""]] * 3                # no placeholder text
+    assert tb["props"]["grid"] is True                           # lines between all the cells
+    assert r["size"][0] >= tb["box"][0] + tb["box"][2]          # the figure is the table's size
+    rows = [["Gene", "n"], ["CD3E", "12"], ["GAPDH", "300"], ["ACTB", "7"]]
+    r = s.edit({"figure": name, "op": "table_rows", "oid": tb["oid"], "rows": rows})
+    assert r["ok"], r.get("error")
+    assert (s.project / "tables" / f"{name}.csv").read_text().splitlines()[3] == "ACTB,7"
+    r = s.edit({"figure": name, "op": "fit_figure", "margin": 3})
+    tb = next(e for e in r["figure"]["elements"] if e["kind"] == "table")
+    assert abs(r["figure"]["size"][1] - (tb["box"][1] + tb["box"][3] + 3)) < 0.2
+    for fmt in ("docx", "xlsx", "csv", "tsv", "png", "pptx"):
+        res = s.export({"figure": name, "path": str(tmp_path / f"t.{fmt}"), "dpi": 300})
+        assert res["ok"] and (tmp_path / f"t.{fmt}").exists(), fmt
+    assert (tmp_path / "t.tsv").read_text().splitlines()[1] == "CD3E\t12"
+    with zipfile.ZipFile(tmp_path / "t.docx") as z:
+        assert "w:insideV" in z.read("word/document.xml").decode()
+    with zipfile.ZipFile(tmp_path / "t.xlsx") as z:
+        assert "<v>300</v>" in z.read("xl/worksheets/sheet1.xml").decode()
+    with zipfile.ZipFile(tmp_path / "t.pptx") as z:
+        names = z.namelist()
+        assert "ppt/media/image1.png" in names and "ppt/media/image2.svg" in names
+        assert "svgBlip" in z.read("ppt/slides/slide1.xml").decode()
+
+
+def test_clear_guides(session):
+    s = session
+    edit(s, op="guide_add", x=40)
+    edit(s, op="guide_add", y=30)
+    r = edit(s, op="guide_clear")
+    assert r["figure"]["guides"] == [] and ".guide(" not in fig_text(s)
+    for _ in range(3):
+        s.undo({"figure": "fig1"})

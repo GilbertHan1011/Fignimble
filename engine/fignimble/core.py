@@ -152,6 +152,7 @@ class Plan:
         self.patches: dict[str, list] = {}
         self.inserted: dict[str, list[int]] = {}       # file -> lines (after the edit) where new statements start
         self.new_files: list[Path] = []                 # files made for this edit (a copied picture): undone with it
+        self.raw: dict[str, tuple[str, str]] = {}       # files that aren't Python (a table's CSV): (before, after)
 
     def source(self, path: str) -> Source:
         if path not in self.sources:
@@ -177,6 +178,9 @@ class Plan:
                     raise EditError(f"the edit would break {Path(path).name} (line {exc.lineno}: {exc.msg}); "
                                     "nothing was changed") from None
                 out[path] = (src.text, new)
+        for path, (before, after) in self.raw.items():
+            if before != after:
+                out[path] = (before, after)
         return out
 
 
@@ -473,6 +477,16 @@ class Session:
             lines = {}
             for path, ins in plan.inserted.items():
                 lines[path] = ins
+            if a.get("then"):
+                # a follow-up edit that needs this one rendered first (the page fitted to a table just typed
+                # into): one undo step with it
+                n = len(self.history)
+                more = self.edit({**a["then"], "figure": name, "pxPerMM": a.get("pxPerMM")})
+                if more.get("ok") and len(self.history) == n + 1:
+                    extra = self.history.pop()
+                    for path, (before, after) in extra["files"].items():
+                        old = self.history[-1]["files"].get(path)
+                        self.history[-1]["files"][path] = (old[0] if old else before, after)
             res = {"ok": True, **self._after(name, a.get("pxPerMM"), lines or None)}
             fig = res.get("figure", {})
             if fig.get("error"):
@@ -546,7 +560,7 @@ class Session:
     def _op_set(self, plan, data, a):
         """Change arguments of one element: {oid, props}."""
         info = self._info(data, a["oid"])
-        props = {k: (REMOVE if (v is None and k in ("label_dx", "label_dy", "group", "name", "crop", "font", "flip",
+        props = {k: (REMOVE if (v is None and k in ("label_dx", "label_dy", "label_x", "label_y", "group", "name", "crop", "font", "flip",
                                                     "width", "texts", "colors", "text_style"))
                      or (v is False and k in ("locked", "hidden")) else v)
                  for k, v in a["props"].items()}
@@ -600,6 +614,12 @@ class Session:
                 d = info["dest"]
                 self._set(plan, data, info, {"x": round((bx + dx - d[0]) / d[2], 4),
                                              "y": round((by + dy - d[1]) / d[3], 4)})
+                continue
+            if info["kind"] == "label" and info.get("detached"):
+                # unhooked from its panel: it has a place of its own
+                panel = self._info(data, info["panel"])
+                x, y = info["box"][:2]
+                self._set(plan, data, panel, {"label_x": round(x + dx, 2), "label_y": round(y + dy, 2)})
                 continue
             if info["kind"] == "label":
                 if a.get("labels") == "all":
@@ -1227,13 +1247,13 @@ class Session:
         return "Reset Text in Panel"
 
     def _op_panel_color(self, plan, data, a):
-        """Recolour marks a panel's code draws: {oid, keys, color, old}. When the old colour is written once in the
+        """Recolor marks a panel's code draws: {oid, keys, color, old}. When the old color is written once in the
         panel's code, that is changed (every mark drawn with it follows); otherwise the panel gets colors={key: new}
         for the marks given."""
         import matplotlib.colors as mcolors
         info = self._info(data, a["oid"])
         if not (info["kind"] == "panel" or (info["kind"] == "inset" and info.get("inner") == "panel")):
-            raise EditError("only the marks of a panel drawn by code can be recoloured this way")
+            raise EditError("only the marks of a panel drawn by code can be recolored this way")
         item = self._picture_call(data, info) if info["kind"] == "inset" else info
         props = item["props"]
         new, old, keys = a["color"], (a.get("old") or "").upper(), list(a["keys"])
@@ -1254,12 +1274,12 @@ class Session:
                 if len(hits) == 1:
                     n = hits[0]
                     plan.add(path, [(code.start(n), code.end(n), srcedit.fmt(new))])
-                    return "Recolour in Panel"
+                    return "Recolor in Panel"
         colors = dict(props.get("colors") or {})
         for k in keys:
             colors[k] = new
         self._set(plan, data, item, {"colors": colors})
-        return "Recolour in Panel"
+        return "Recolor in Panel"
 
     def _op_paste_style(self, plan, data, a):
         """Give elements another's look (the eyedropper): {oids, props}; each takes the settings its kind has."""
@@ -1303,6 +1323,94 @@ class Session:
             if made is not None:
                 made.append(dest)
         return dest.relative_to(self.project)
+
+    def _op_label_detach(self, plan, data, a):
+        """Unhook a panel's label from it, or hook it on again: {oid (the panel or its label), detach: bool}. An
+        unhooked label stays where it is when the panel moves (label_x/label_y); hooked on again, it keeps its
+        place as an offset from the panel's corner (label_dx/label_dy)."""
+        info = self._info(data, a["oid"])
+        if info["kind"] != "label":
+            info = next((l for l in data["labels"] if l["panel"] == info["oid"]), None)
+            if info is None:
+                raise EditError("that has no panel letter")
+        panel = self._info(data, info["panel"])
+        x, y = info["box"][:2]
+        detach = bool(a.get("detach", not info.get("detached")))
+        if detach:
+            self._set(plan, data, panel, {"label_x": round(x, 2), "label_y": round(y, 2),
+                                          "label_dx": REMOVE, "label_dy": REMOVE})
+            return "Unlink Label"
+        lp = data["labelStyle"]["props"]
+        bx, by = panel["box"][:2]
+        dx, dy = x - (bx + lp["dx"]), y - (by + lp["dy"])
+        self._set(plan, data, panel, {"label_x": REMOVE, "label_y": REMOVE,
+                                      "label_dx": REMOVE if abs(dx) < 0.005 else round(dx, 2),
+                                      "label_dy": REMOVE if abs(dy) < 0.005 else round(dy, 2)})
+        return "Link Label"
+
+    def _op_caption(self, plan, data, a):
+        """The figure's caption: {text} (empty: none). Written as fig.caption(...) after the figure's code."""
+        text = str(a.get("text") or "").rstrip()
+        cap = data.get("caption") or {}
+        site = cap.get("site")
+        lit = srcedit.text_literal(text)
+        if site and site.get("file"):
+            src = plan.source(site["file"])
+            call = src.find_call(site, "caption")
+            if call is None:
+                raise EditError("can't find the figure's fig.caption(...) call")
+            if not text:
+                st = src.statement(call)
+                a0, b0 = src.stmt_span(st)
+                plan.add(src.path, [(a0, b0, "")])
+                return "Remove Caption"
+            if call.args:
+                node = call.args[0]
+                if not srcedit.is_literal(node):
+                    raise EditError(f"the caption is computed by the code ({src.seg(node)}); change it there")
+                plan.add(src.path, [(src.start(node), src.end(node), lit)])
+            else:
+                plan.add(src.path, srcedit.set_args(src, call, "caption", {"text": srcedit.Raw(lit)}, "the caption"))
+            return "Edit Caption"
+        if not text:
+            return "Edit Caption"
+        src = plan.source(data["file"])
+        var = srcedit.figure_var(src)
+        end = len(src.text)
+        prefix = "" if src.text.endswith("\n") else "\n"
+        plan.add(src.path, [(end, end, prefix + f"{var}.caption({lit})\n")])
+        return "Edit Caption"
+
+    def _op_table_rows(self, plan, data, a):
+        """New cells for a table: {oid, rows: [[str]]}. A table from a file gets the file written again (in its
+        own delimiter); one written in the code gets its rows= replaced."""
+        info = self._info(data, a["oid"])
+        if info["kind"] != "table":
+            raise EditError("only a table has cells")
+        rows = [[str(c) for c in r] for r in a["rows"]]
+        if not rows or not rows[0]:
+            raise EditError("a table needs at least one cell")
+        src_file = info["props"].get("source")
+        if src_file:
+            path = (self.project / src_file).resolve()
+            if not str(path).startswith(str(self.project) + os.sep):
+                raise EditError("that table's file is outside the project")
+            plan.raw[str(path)] = (path.read_text(encoding="utf-8-sig") if path.exists() else "",
+                                   tables.write_delimited(rows, "\t" if path.suffix.lower() in (".tsv", ".txt") else ","))
+        else:
+            self._set(plan, data, info, {"rows": [[_cell(c) for c in r] for r in rows]})
+        return "Edit Table"
+
+    def _op_fit_figure(self, plan, data, a):
+        """Make the figure the size of what is on it, with a margin: {margin?} (mm)."""
+        m = float(a.get("margin", 3))
+        boxes = [e["box"] for e in data["elements"] + data["labels"]
+                 if e.get("box") and e["kind"] not in ("zoom",) and not e.get("parent") and e["box"][2] > 0]
+        if not boxes:
+            raise EditError("nothing on the figure to fit it to")
+        x1 = max(b[0] + b[2] for b in boxes)
+        y1 = max(b[1] + b[3] for b in boxes)
+        return self._op_figure(plan, data, {"props": {"width": round(x1 + m, 1), "height": round(y1 + m, 1)}})
 
     def _op_group(self, plan, data, a):
         used = {e["props"].get("group") for e in data["elements"]}
@@ -1458,6 +1566,18 @@ class Session:
         a0, b0 = src.stmt_span(st)
         plan.add(src.path, [(a0, b0, "")])
         return "Delete Guide"
+
+    def _op_guide_clear(self, plan, data, a):
+        """Remove every guide of the figure."""
+        if not data["guides"]:
+            raise EditError("the figure has no guides")
+        spans = {}
+        for i in range(len(data["guides"])):
+            src, call, g = self._guide_call(plan, data, i)
+            spans.setdefault(src.path, set()).add(src.stmt_span(src.statement(call)))
+        for path, ss in spans.items():
+            plan.add(path, [(a0, b0, "") for a0, b0 in sorted(ss)])
+        return "Clear Guides"
 
     # --- clipboard ---
 
@@ -1663,12 +1783,14 @@ class Session:
         while dest.exists():
             n += 1
             dest = self.project / "panels" / f"{Path(name).stem}-{n}.py"
-        with tempfile.TemporaryDirectory() as tmp:
-            try:
-                got = remote.fetch(host, path, Path(tmp) / name)
-            except remote.RemoteError as exc:
-                return {"ok": False, "error": f"couldn't fetch {host}:{path}: {exc}"}
-            text = got.read_text(encoding="utf-8", errors="replace")
+        text = a.get("text")                          # fetched already (by the tunnel, on the Mac)
+        if text is None:
+            with tempfile.TemporaryDirectory() as tmp:
+                try:
+                    got = remote.fetch(host, path, Path(tmp) / name)
+                except remote.RemoteError as exc:
+                    return {"ok": False, "error": f"couldn't fetch {host}:{path}: {exc}"}
+                text = got.read_text(encoding="utf-8", errors="replace")
         try:
             ast.parse(text)
         except SyntaxError as exc:
@@ -1687,39 +1809,104 @@ class Session:
         where = remote.origin(path.read_text(encoding="utf-8", errors="replace")) if path.exists() else None
         if where is None:
             return {"ok": False, "error": f"{path.name} wasn't fetched from a server"}
-        with tempfile.TemporaryDirectory() as tmp:
-            try:
-                got = remote.fetch(where[0], where[1], Path(tmp) / path.name)
-            except remote.RemoteError as exc:
-                return {"ok": False, "error": f"couldn't fetch {where[0]}:{where[1]}: {exc}"}
-            text = got.read_text(encoding="utf-8", errors="replace")
+        text = a.get("text")                          # fetched already (by the tunnel, on the Mac)
+        if text is None:
+            with tempfile.TemporaryDirectory() as tmp:
+                try:
+                    got = remote.fetch(where[0], where[1], Path(tmp) / path.name)
+                except remote.RemoteError as exc:
+                    return {"ok": False, "error": f"couldn't fetch {where[0]}:{where[1]}: {exc}"}
+                text = got.read_text(encoding="utf-8", errors="replace")
         return self.write_source({"file": str(path), "text": remote.with_header(text, *where), "figure": a.get("figure"),
                                   "pxPerMM": a.get("pxPerMM")})
 
     def export_table(self, a: dict) -> dict:
-        """A table of a figure as a Word file: {figure, oid, path} -> {ok, path}. In the figure's font and the
-        table's size, with its header, decimals and alignment."""
+        """A table of a figure as a file people edit: {figure, oid?, path, format?} -> {ok, path}. .docx (a Word
+        table in the figure's font and the table's size), .xlsx, .csv or .tsv; with its header and decimals. Without
+        `oid`, the figure's only table."""
         data = self.render(a["figure"])
         if data.get("error"):
             return {"ok": False, "error": "the figure's code doesn't run; fix it first"}
-        info = self._info(data, a["oid"])
+        if a.get("oid") is not None:
+            info = self._info(data, a["oid"])
+        else:
+            found = [e for e in data["elements"] if e["kind"] == "table"]
+            if not found:
+                return {"ok": False, "error": "this figure has no table"}
+            info = found[0]
         if info["kind"] != "table":
-            return {"ok": False, "error": "only a table can be exported as a Word file"}
+            return {"ok": False, "error": "only a table can be exported as a Word, Excel, CSV or TSV file"}
         p = info["props"]
         rows = p["rows"] if p.get("rows") is not None else tables.read_rows(self.project / p["source"])
         st = data["style"]["props"]
-        path = tables.write_docx(rows, a["path"], header=p.get("header", True), decimals=p.get("decimals"),
-                                 align=p.get("align"), font=p.get("font") or st.get("font") or "Arial",
-                                 size=p.get("size") or st.get("size") or 7, title=a.get("title"))
+        try:
+            path = tables.write_table(rows, a["path"], a.get("format"), header=p.get("header", True),
+                                      decimals=p.get("decimals"), align=p.get("align"),
+                                      font=p.get("font") or st.get("font") or "Arial",
+                                      size=p.get("size") or st.get("size") or 7, title=a.get("title"),
+                                      grid=bool(p.get("grid")))
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
         return {"ok": True, "path": path}
 
+    def new_table(self, a: dict) -> dict:
+        """A table in a figure of its own: {name, rows, cols} -> {ok, name}. Its cells are tables/<name>.csv (a
+        header row and rows, all empty, to type into), and the figure is sized to the table, without panel letters."""
+        name = re.sub(r"\W", "_", a.get("name") or "table").strip("_") or "table"
+        if name[0].isdigit():
+            name = "table_" + name
+        base, n = name, 1
+        while (self.project / f"{name}.py").exists() or (self.project / "tables" / f"{name}.csv").exists():
+            n += 1
+            name = f"{base}{n}"
+        nr, nc = max(1, int(a.get("rows", 4))), max(1, int(a.get("cols", 3)))
+        rows = [["" for _ in range(nc)] for _ in range(nr)]
+        (self.project / "tables").mkdir(exist_ok=True)
+        csv_path = self.project / "tables" / f"{name}.csv"
+        if not (self.project / "style.py").exists():
+            (self.project / "style.py").write_text(templates.style_py(a.get("journal")), encoding="utf-8")
+        text = templates.table_figure_py(f"tables/{name}.csv", float(a.get("width", 90)), float(a.get("height", 40)))
+        path = self.project / f"{name}.py"
+        with self.edit_lock:
+            csv_path.write_text(tables.write_delimited(rows), encoding="utf-8")
+            path.write_text(text, encoding="utf-8")
+            self.history.append({"label": "New Table", "files": {str(path): (None, text.encode()),
+                                                                 str(csv_path): (None, csv_path.read_bytes())}})
+            self.redo.clear()
+            self._sig = self.fingerprint()
+        # the figure the size of its table
+        res = self.edit({"figure": name, "op": "fit_figure", "margin": 3})
+        if res.get("ok") and self.history and self.history[-1]["label"].startswith("Figure"):
+            fit = self.history.pop()                    # one undo step with the new files
+            self.history[-1]["files"][str(path)] = (None, fit["files"][str(path)][1])
+        return {"ok": True, "name": name}
+
     def export(self, a: dict) -> dict:
+        fmt = (a.get("format") or Path(a["path"]).suffix.lstrip(".")).lower()
+        if fmt in ("docx", "xlsx", "csv", "tsv"):           # a table figure, as cells people can edit
+            res = self.export_table({**a, "format": fmt, "oid": a.get("oid")})
+            if not res.get("ok"):
+                raise RuntimeError(res.get("error"))
+            return {**res, "format": fmt, "resolution": {}, "warnings": []}
         with self.render_lock:
             return self.worker.request({"cmd": "export", "project": str(self.project), "cache": str(self.cache),
                                         "file": self.figure_file(a["figure"]), "path": a["path"],
                                         "format": a.get("format"), "dpi": a.get("dpi", 600),
                                         "dark": bool(a.get("dark")), "cmyk": bool(a.get("cmyk")),
                                         "outline": bool(a.get("outline")), "journal": a.get("journal")}, timeout=600)
+
+
+def _cell(c: str):
+    """A typed cell as it goes into rows=: a number when it reads as one, else the text."""
+    t = c.strip()
+    try:
+        return int(t)
+    except ValueError:
+        pass
+    try:
+        return float(t) if t and t.lower() not in ("nan", "inf", "-inf", "infinity") else c
+    except ValueError:
+        return c
 
 
 def _natural(s: str):

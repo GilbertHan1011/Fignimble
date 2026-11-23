@@ -1,10 +1,12 @@
 import AppKit
 
-/// The drawer below the canvas (after Manimble's): the code, the preflight problems and the terminals share it as
-/// tabs ("Code | Preflight | Terminal 1 | Terminal 2 … | +"), so there is one divider between it and the figure.
+/// The drawer below the canvas (after Manimble's): the caption, the code, the preflight problems and the terminals
+/// share it as tabs ("Caption | Code | Preflight | History | Terminal 1 … | +"), so there is one divider between it
+/// and the figure.
 final class BottomDrawer: NSView {
-    enum Page { case code, problems, history, terminal }
+    enum Page { case caption, code, problems, history, terminal }
     private(set) var page: Page = .code
+    let caption: CaptionPane
     let code: CodePane
     let problems: ProblemsView
     let history: HistoryView
@@ -15,8 +17,8 @@ final class BottomDrawer: NSView {
     var onNewTerminal: (() -> Void)?
     var onHide: (() -> Void)?
 
-    init(code: CodePane, problems: ProblemsView, history: HistoryView, terminal: TerminalPanel) {
-        self.code = code; self.problems = problems; self.history = history; self.terminal = terminal
+    init(caption: CaptionPane, code: CodePane, problems: ProblemsView, history: HistoryView, terminal: TerminalPanel) {
+        self.caption = caption; self.code = code; self.problems = problems; self.history = history; self.terminal = terminal
         super.init(frame: .zero)
         wantsLayer = true
         Theme.layerColors(self) { $0.layer?.backgroundColor = Theme.canvasBottom.cgColor }
@@ -31,7 +33,7 @@ final class BottomDrawer: NSView {
         row.translatesAutoresizingMaskIntoConstraints = false
         bar.addSubview(row)
         let body = NSView()
-        for v in [code, problems, history, terminal] as [NSView] { v.translatesAutoresizingMaskIntoConstraints = false; body.addSubview(v) }
+        for v in [caption, code, problems, history, terminal] as [NSView] { v.translatesAutoresizingMaskIntoConstraints = false; body.addSubview(v) }
         for v in [bar, body] { v.translatesAutoresizingMaskIntoConstraints = false; addSubview(v) }
         NSLayoutConstraint.activate([
             bar.leadingAnchor.constraint(equalTo: leadingAnchor), bar.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -42,7 +44,7 @@ final class BottomDrawer: NSView {
             body.topAnchor.constraint(equalTo: bar.bottomAnchor), body.bottomAnchor.constraint(equalTo: bottomAnchor),
             heightAnchor.constraint(greaterThanOrEqualToConstant: 90),
         ])
-        for v in [code, problems, history, terminal] as [NSView] {
+        for v in [caption, code, problems, history, terminal] as [NSView] {
             NSLayoutConstraint.activate([
                 v.leadingAnchor.constraint(equalTo: body.leadingAnchor), v.trailingAnchor.constraint(equalTo: body.trailingAnchor),
                 v.topAnchor.constraint(equalTo: body.topAnchor), v.bottomAnchor.constraint(equalTo: body.bottomAnchor),
@@ -55,6 +57,7 @@ final class BottomDrawer: NSView {
 
     func show(_ p: Page) {
         page = p
+        caption.isHidden = p != .caption
         code.isHidden = p != .code
         problems.isHidden = p != .problems
         history.isHidden = p != .history
@@ -67,6 +70,8 @@ final class BottomDrawer: NSView {
 
     func rebuildStrip() {
         strip.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        strip.addArrangedSubview(DrawerTab(title: "Caption", tip: "The figure's caption: free text kept with the figure, not drawn on it (⌥⌘J)",
+                                           selected: page == .caption, onSelect: { [weak self] in self?.show(.caption) }, onClose: nil))
         strip.addArrangedSubview(DrawerTab(title: "Code", tip: "The figure's Python and its panels' (⌥⌘E)", selected: page == .code,
                                            onSelect: { [weak self] in self?.show(.code) }, onClose: nil))
         let n = problems.count
@@ -89,6 +94,63 @@ final class BottomDrawer: NSView {
 
     @objc private func plusPressed() { onNewTerminal?() }
     @objc private func hidePressed() { onHide?() }
+}
+
+/// The figure's caption, typed freely; it is written into the figure's code (fig.caption(...)) a moment after
+/// typing stops, and when the pane loses the keyboard.
+final class CaptionPane: NSView, NSTextViewDelegate {
+    weak var main: MainController?
+    let text = NSTextView()
+    private let hint = NSTextField(labelWithString: "Type the figure's caption. It is kept in the figure's code as fig.caption(...), goes with the figure into PowerPoint as its alt text, and is never drawn on the figure.")
+    private var shown = ""
+    private var figureName: String?
+    private var work: DispatchWorkItem?
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        let scroll = NSScrollView(); scroll.hasVerticalScroller = true; scroll.borderType = .noBorder
+        text.isRichText = false; text.allowsUndo = true; text.font = Theme.font(13)
+        text.textContainerInset = NSSize(width: 10, height: 8)
+        text.isAutomaticQuoteSubstitutionEnabled = false; text.isAutomaticDashSubstitutionEnabled = false
+        text.isContinuousSpellCheckingEnabled = true
+        text.isVerticallyResizable = true; text.autoresizingMask = [.width]
+        text.textContainer?.widthTracksTextView = true
+        text.delegate = self
+        text.backgroundColor = Theme.codeBackground
+        scroll.documentView = text
+        hint.font = Theme.font(10.5); hint.textColor = .tertiaryLabelColor; hint.lineBreakMode = .byTruncatingTail
+        for v in [scroll, hint] as [NSView] { v.translatesAutoresizingMaskIntoConstraints = false; addSubview(v) }
+        NSLayoutConstraint.activate([
+            scroll.leadingAnchor.constraint(equalTo: leadingAnchor), scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
+            scroll.topAnchor.constraint(equalTo: topAnchor), scroll.bottomAnchor.constraint(equalTo: hint.topAnchor, constant: -3),
+            hint.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10), hint.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            hint.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -4),
+        ])
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    /// The figure on screen was rendered: show its caption, unless what is typed hasn't been written yet.
+    func set(_ caption: String, figure: String?) {
+        if figure != figureName { commit(); figureName = figure; shown = caption; text.string = caption; return }
+        if work == nil, caption != shown { shown = caption; if text.string != caption { text.string = caption } }
+    }
+
+    func textDidChange(_ n: Notification) {
+        work?.cancel()
+        let w = DispatchWorkItem { [weak self] in self?.commit() }
+        work = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: w)
+    }
+    func textDidEndEditing(_ n: Notification) { commit() }
+
+    /// Write what is typed into the figure's code.
+    func commit() {
+        work?.cancel(); work = nil
+        let t = text.string
+        guard t != shown, figureName != nil, figureName == main?.current else { return }
+        shown = t
+        main?.edit(["op": "caption", "text": t])
+    }
 }
 
 /// The preflight warnings of the figure on screen; clicking one selects what it is about.
@@ -185,7 +247,7 @@ private final class DrawerTab: NSView {
 }
 
 
-/// The undo history: the edits made in Fignimble, oldest first, then the ones undone (greyed). Clicking one undoes or
+/// The undo history: the edits made in Fignimble, oldest first, then the ones undone (grayed). Clicking one undoes or
 /// redoes up to it.
 final class HistoryView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     weak var main: MainController?

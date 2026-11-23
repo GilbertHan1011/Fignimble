@@ -177,8 +177,8 @@ final class Inspector: NSView {
         b.state = on ? .on : .off; b.font = Theme.font(11); b.controlSize = .small
         return b
     }
-    /// A colour well, and the project's palette as swatches beside it (the colour picker's own eyedropper picks any
-    /// colour on the screen).
+    /// A color well, and the project's palette as swatches beside it (the color picker's own eyedropper picks any
+    /// color on the screen).
     private func color(_ hex: String?, _ f: @escaping (String) -> Void) -> NSView {
         let w = NSColorWell(frame: NSRect(x: 0, y: 0, width: 44, height: 22))
         if #available(macOS 13.0, *) { w.colorWellStyle = .minimal }
@@ -189,7 +189,7 @@ final class Inspector: NSView {
             if NSColor(hex: v) != nil { f(v.uppercased()) }
         }
         hexField.font = Theme.mono(10)
-        // the colour picker reports every step of a drag: write the colour once it settles
+        // the color picker reports every step of a drag: write the color once it settles
         var pending: DispatchWorkItem?
         let a = action { s in
             guard let w = s as? NSColorWell else { return }
@@ -219,6 +219,11 @@ final class Inspector: NSView {
             row.addArrangedSubview(b)
         }
         return column
+    }
+    /// The fonts installed on this Mac, to pick from or type (empty, when `blank` says what that means: the
+    /// style's font).
+    private func fontPicker(_ value: String?, blank: String? = nil, width: CGFloat = 170, _ f: @escaping (String?) -> Void) -> FontPicker {
+        FontPicker(value, blank: blank, width: width, commit: f)
     }
     private func numberField(_ v: Double?, width: CGFloat = 52, _ f: @escaping (Double) -> Void) -> Field {
         Field(v.map(mm) ?? "", width: width) { s in if let d = Double(s.replacingOccurrences(of: ",", with: ".")) { f(d) } }
@@ -265,8 +270,7 @@ final class Inspector: NSView {
     private func figureSection(_ f: FigureData) {
         guard let m = main else { return }
         section("Figure · \(f.name)")
-        row([("W", numberField(Double(f.size.width)) { m.edit(["op": "figure", "props": ["width": $0]]) }),
-             ("H", numberField(Double(f.size.height)) { m.edit(["op": "figure", "props": ["height": $0]]) }), ("mm", NSView())])
+        pageSizeRow(f)
         // a journal's widths, the journals by publisher
         let widthMenu = NSPopUpButton(frame: .zero, pullsDown: true)
         widthMenu.controlSize = .small; widthMenu.font = Theme.font(11)
@@ -282,16 +286,17 @@ final class Inspector: NSView {
         }
         widthMenu.widthAnchor.constraint(equalToConstant: 220).isActive = true
         add(widthMenu)
+        row([("Background", color(f.background ?? "#FFFFFF") { m.edit(["op": "figure", "props": ["background": $0]]) })])
         add(check("Transparent background", f.background == nil) { on in m.edit(["op": "figure", "props": ["background": on ? (NSNull() as Any) : "#FFFFFF"]]) })
 
         section("Style (every panel)")
         let st = f.style
-        row([("Font", Field(st["font"] as? String ?? "Arial", width: 110) { m.edit(["op": "style", "props": ["font": $0]]) })])
+        row([("Font", fontPicker(st["font"] as? String ?? "Arial") { if let v = $0 { m.edit(["op": "style", "props": ["font": v]]) } })])
         row([("Text", numberField(num(st["size"])) { m.edit(["op": "style", "props": ["size": $0]]) }), ("pt   Lines", numberField(num(st["linewidth"])) { m.edit(["op": "style", "props": ["linewidth": $0]]) }), ("pt", NSView())])
         add(check("Hide top and right axis lines", st["despine"] as? Bool ?? true) { m.edit(["op": "style", "props": ["despine": $0]]) })
         row([("Min text", numberField(num(st["min_font"]), width: 40) { m.edit(["op": "style", "props": ["min_font": $0]]) }), ("pt  Min dpi", numberField(num(st["min_dpi"]), width: 48) { m.edit(["op": "style", "props": ["min_dpi": $0]]) })])
-        let presets: [(String, String)] = [("okabe-ito", "Okabe–Ito (colour-blind safe)"), ("tol-bright", "Paul Tol bright (colour-blind safe)"),
-                                           ("tol-muted", "Paul Tol muted (colour-blind safe)"), ("tol-vibrant", "Paul Tol vibrant (colour-blind safe)"),
+        let presets: [(String, String)] = [("okabe-ito", "Okabe–Ito (color-blind safe)"), ("tol-bright", "Paul Tol bright (color-blind safe)"),
+                                           ("tol-muted", "Paul Tol muted (color-blind safe)"), ("tol-vibrant", "Paul Tol vibrant (color-blind safe)"),
                                            ("colorbrewer-set2", "ColorBrewer Set2"), ("colorbrewer-dark2", "ColorBrewer Dark2"),
                                            ("tableau", "Tableau (matplotlib's)")]
         let named = st["palette"] as? String
@@ -303,7 +308,7 @@ final class Inspector: NSView {
             row([("", sw)])
         }
         let pal = named ?? f.palette.map { $0.0.allSatisfy(\.isNumber) ? $0.1 : "\($0.0)=\($0.1)" }.joined(separator: ", ")
-        row([("Colours", Field(pal, width: 160) { t in
+        row([("Colors", Field(pal, width: 160) { t in
             let items = t.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
             if items.isEmpty { m.edit(["op": "style", "props": ["palette": NSNull()]]); return }
             if items.count == 1, f.palettes[items[0].lowercased()] != nil { m.edit(["op": "style", "props": ["palette": items[0].lowercased()]]); return }
@@ -313,8 +318,21 @@ final class Inspector: NSView {
                 m.edit(["op": "style", "props": ["palette": d]])
             } else { m.edit(["op": "style", "props": ["palette": items]]) }
         })])
-        note("Panels draw with this font and these sizes, so they match, and plot in the palette's colours in turn (color(\"KO\") in panel code). A palette is #RRGGBB, …, or name=#RRGGBB, …. A style in style.py is shared by every figure that imports it.")
+        note("Panels draw with this font and these sizes, so they match, and plot in the palette's colors in turn (color(\"KO\") in panel code). A palette is #RRGGBB, …, or name=#RRGGBB, …. A style in style.py is shared by every figure that imports it.")
         labelSection(f)
+    }
+
+    /// The page's width and height, in the units picked (mm, cm, in, ft; the code keeps millimeters).
+    private func pageSizeRow(_ f: FigureData) {
+        guard let m = main else { return }
+        let units = MainController.sizeUnits
+        let u = units.firstIndex { $0.0 == UserDefaults.standard.string(forKey: "newFigureUnit") } ?? 0
+        let k = units[u].1
+        let set = { (key: String, v: Double) in m.edit(["op": "figure", "props": [key: (v * k * 100).rounded() / 100]]) }
+        row([("W", numberField(Double(f.size.width) / k, width: 50) { set("width", $0) }),
+             ("H", numberField(Double(f.size.height) / k, width: 50) { set("height", $0) }),
+             ("", popup(units.map(\.0), units[u].0, width: 58) { i, _ in
+                UserDefaults.standard.set(units[i].0, forKey: "newFigureUnit"); self.update() })])
     }
 
     static let labelFormats: [(String, String, String)] = [("a", "{}", "lower"), ("(a)", "({})", "lower"), ("a)", "{})", "lower"), ("a.", "{}.", "lower"),
@@ -333,8 +351,8 @@ final class Inspector: NSView {
         row([("Size", numberField(num(ls["size"]), width: 40) { m.edit(["op": "labels", "props": ["size": $0]]) }), ("pt", NSView()),
              ("", check("Bold", (ls["weight"] as? String) == "bold") { m.edit(["op": "labels", "props": ["weight": $0 ? "bold" : "normal"]]) }),
              ("", check("Italic", (ls["style"] as? String) == "italic") { m.edit(["op": "labels", "props": ["style": $0 ? "italic" : "normal"]]) })])
-        row([("Font", Field(ls["font"] as? String ?? "", width: 110) { m.edit(["op": "labels", "props": ["font": $0.isEmpty ? (NSNull() as Any) : $0]]) })])
-        row([("Colour", color(ls["color"] as? String ?? "#000000") { m.edit(["op": "labels", "props": ["color": $0]]) })])
+        row([("Font", fontPicker(ls["font"] as? String, blank: "Style's font") { m.edit(["op": "labels", "props": ["font": $0 ?? (NSNull() as Any)]]) })])
+        row([("Color", color(ls["color"] as? String ?? "#000000") { m.edit(["op": "labels", "props": ["color": $0]]) })])
         row([("Offset X", numberField(num(ls["dx"]), width: 40) { m.edit(["op": "labels", "props": ["dx": $0]]) }),
              ("Y", numberField(num(ls["dy"]), width: 40) { m.edit(["op": "labels", "props": ["dy": $0]]) }), ("mm", NSView())])
         row([("Order", popup(["Reading order", "Order in the code"], (ls["order"] as? String) == "source" ? "Order in the code" : "Reading order", width: 140) { i, _ in
@@ -378,7 +396,7 @@ final class Inspector: NSView {
         }
     }
 
-    /// A text or mark inside a panel, picked on the canvas: retype it, set its size, colour and weight. The change
+    /// A text or mark inside a panel, picked on the canvas: retype it, set its size, color and weight. The change
     /// goes into the panel's code where the code writes it once, otherwise onto the panel's line (texts=, text_style=,
     /// colors=).
     private func partSection(_ f: FigureData, _ e: Element, _ pt: PanelPart) {
@@ -390,7 +408,7 @@ final class Inspector: NSView {
             let style = { (p: [String: Any]) in m.edit(["op": "panel_text_style", "oid": e.oid, "key": t.key, "text": t.text, "props": p]) }
             row([("Text", Field(t.text, width: 170) { m.edit(["op": "panel_text", "oid": e.oid, "key": t.key, "text": $0, "old": t.text]) })])
             row([("Size", numberField(t.size, width: 44) { if $0 > 0 { style(["size": $0]) } }), ("pt", NSView())])
-            row([("Colour", color(t.color) { style(["color": $0]) })])
+            row([("Color", color(t.color) { style(["color": $0]) })])
             row([("", check("Bold", t.bold) { style(["weight": $0 ? "bold" : "normal"]) }),
                  ("", check("Italic", t.italic) { style(["style": $0 ? "italic" : "normal"]) })])
             let changed = (props["texts"] as? [String: Any])?[t.key] != nil || (props["text_style"] as? [String: Any])?[t.key] != nil
@@ -398,15 +416,15 @@ final class Inspector: NSView {
             note("Return or double-click retypes it on the canvas; Delete empties it; Esc goes back to the panel. A text the panel's code writes once (ax.set_xlabel(\"…\")) is changed there; any other is changed on the panel's line.")
         } else if let mk = m.canvas.partMark(pt) {
             section("Mark in the panel · \(mk.key.replacingOccurrences(of: "ax0.", with: ""))")
-            row([("Colour", color(mk.color) { m.edit(["op": "panel_color", "oid": e.oid, "keys": [mk.key], "color": $0, "old": mk.color]) })])
+            row([("Color", color(mk.color) { m.edit(["op": "panel_color", "oid": e.oid, "keys": [mk.key], "color": $0, "old": mk.color]) })])
             var colors = props["colors"] as? [String: Any] ?? [:]
             if colors[mk.key] != nil {
-                row([("", button("Back to the Code's Colour") {
+                row([("", button("Back to the Code's Color") {
                     colors.removeValue(forKey: mk.key)
                     m.edit(["op": "set", "oid": e.oid, "props": ["colors": colors.isEmpty ? (NSNull() as Any) : colors]])
                 })])
             }
-            note("A colour the panel's code writes once is changed there, so every mark drawn with it follows; otherwise only this mark changes (colors= on the panel's line). Esc goes back to the panel.")
+            note("A color the panel's code writes once is changed there, so every mark drawn with it follows; otherwise only this mark changes (colors= on the panel's line). Esc goes back to the panel.")
         }
     }
 
@@ -479,6 +497,7 @@ final class Inspector: NSView {
         case "text":
             section("Text")
             add(Field(e.s("text") ?? "", width: 220) { setp(["text": $0]) })
+            row([("Font", fontPicker(e.s("font"), blank: "Style's font") { setp(["font": $0 ?? (NSNull() as Any)]) })])
             row([("Size", numberField(e.p("size") ?? num(f.style["size"]), width: 40) { setp(["size": $0]) }), ("pt", NSView()),
                  ("", color(e.s("color")) { setp(["color": $0]) })])
             row([("", check("Bold", e.s("weight") == "bold") { setp(["weight": $0 ? "bold" : "normal"]) }),
@@ -511,7 +530,7 @@ final class Inspector: NSView {
             note("Drag a point to move it. Draw new paths with the pen (P).")
         case "zoom":
             section("Zoom box")
-            row([("Colour", color(e.s("color")) { setp(["color": $0]) }), ("Line", numberField(e.p("width"), width: 36) { setp(["width": $0]) }), ("pt", NSView())])
+            row([("Color", color(e.s("color")) { setp(["color": $0]) }), ("Line", numberField(e.p("width"), width: 36) { setp(["width": $0]) }), ("pt", NSView())])
             row([("", check("Lines to the magnified view", e.props["lines"] as? Bool ?? true) { setp(["lines": $0]) })])
             row([("", check("Crop the magnified picture to the box", e.props["sync"] as? Bool ?? true) { setp(["sync": $0]) })])
             note("Drag the box (or its handles) on the figure: the magnified picture follows.")
@@ -521,7 +540,7 @@ final class Inspector: NSView {
             row([("One pixel is", numberField(e.p("pixel_size"), width: 60) { setp(["pixel_size": $0]) }), (e.s("unit") ?? "µm", NSView())])
             row([("Corner", popup(["lower right", "lower left", "upper right", "upper left"], e.s("corner"), width: 110) { _, t in
                 setp(["corner": t, "x": NSNull(), "y": NSNull()]) })])
-            row([("Colour", color(e.s("color")) { setp(["color": $0]) }), ("", check("Label", e.props["label"] as? Bool ?? true) { setp(["label": $0]) })])
+            row([("Color", color(e.s("color")) { setp(["color": $0]) }), ("", check("Label", e.props["label"] as? Bool ?? true) { setp(["label": $0]) })])
             row([("Thickness", numberField(e.p("thickness"), width: 40) { setp(["thickness": $0]) }), ("mm", NSView())])
         case "rect", "ellipse":
             section(e.kind == "rect" ? "Rectangle" : "Ellipse")
@@ -530,9 +549,15 @@ final class Inspector: NSView {
             row([("Opacity", numberField((e.p("opacity") ?? 1) * 100, width: 40) { setp(["opacity": max(0, min(1, $0 / 100))]) }), ("%", NSView())])
             if e.kind == "rect" { panelLabelRows(f, e) }        // a schematic's background can carry its letter
         case "table":
+            if f.isTableFigure {
+                section("Page")
+                pageSizeRow(f)
+                row([("", button("Fit Page to Table", symbol: "arrow.up.left.and.arrow.down.right") { m.edit(["op": "fit_figure", "margin": 3]) })])
+            }
             section("Table")
             if let src = e.s("source") { note(src + "  ·  edit the file and the table follows") } else { note("rows written in the figure's code") }
             row([("", check("First row is a header", e.props["header"] as? Bool ?? true) { setp(["header": $0]) })])
+            row([("", check("Lines between all cells", e.props["grid"] as? Bool ?? false) { setp(["grid": $0]) })])
             row([("Size", numberField(e.p("size") ?? num(f.style["size"]), width: 40) { setp(["size": $0]) }), ("pt", NSView()),
                  ("", color(e.s("color")) { setp(["color": $0]) })])
             let dec: String = {
@@ -548,8 +573,11 @@ final class Inspector: NSView {
             }), ("(2, or one per column: - 0 2 3)", NSView())])
             row([("Align", Field(e.s("align") ?? "", width: 60) { setp(["align": $0.isEmpty ? (NSNull() as Any) : $0]) }),
                  ("(lcr per column; empty: numbers right)", NSView())])
-            row([("", button("Export as Word…", symbol: "doc.richtext") { m.exportTable(nil) })])
-            note("Journals want tables as text: Export as Word writes a real Word table, in the figure's font.")
+            row([("Font", fontPicker(e.s("font"), blank: "Style's font") { setp(["font": $0 ?? (NSNull() as Any)]) })])
+            tableCells(e)
+            note("Double-click a cell on the figure to type in it; Tab goes to the next cell.")
+            row([("", button("Export Table…", symbol: "doc.richtext") { m.exportTable(nil) })])
+            note("Journals want tables as text: Export Table writes a real Word table in the figure's font, or an Excel sheet, CSV or TSV.")
         case "bracket":
             section("Bracket")
             row([("Text", Field(e.s("text") ?? "", width: 90) { setp(["text": $0]) }), ("", color(e.s("color")) { setp(["color": $0]) })])
@@ -568,23 +596,23 @@ final class Inspector: NSView {
         }
     }
 
-    /// The colours a panel draws with, one well for each (all the marks of that colour change together).
+    /// The colors a panel draws with, one well for each (all the marks of that color change together).
     private func panelColorRows(_ e: Element) {
         guard let m = main, !e.marks.isEmpty else { return }
         var groups: [(String, [String])] = []
         for mk in e.marks {
             if let i = groups.firstIndex(where: { $0.0 == mk.color }) { groups[i].1.append(mk.key) } else { groups.append((mk.color, [mk.key])) }
         }
-        section("Colours in this panel")
+        section("Colors in this panel")
         for (c, keys) in groups.prefix(12) {
             let what = keys.count == 1 ? keys[0].replacingOccurrences(of: "ax0.", with: "") : "\(keys.count) marks"
             row([("", color(c) { new in m.edit(["op": "panel_color", "oid": e.oid, "keys": keys, "color": new, "old": c]) }),
                  (what, NSView())])
         }
         if let o = e.props["colors"] as? [String: Any], !o.isEmpty {
-            row([("", button("Undo \(o.count) Recoloured Mark\(o.count == 1 ? "" : "s")") { m.edit(["op": "set", "oid": e.oid, "props": ["colors": NSNull()]]) })])
+            row([("", button("Undo \(o.count) Recolored Mark\(o.count == 1 ? "" : "s")") { m.edit(["op": "set", "oid": e.oid, "props": ["colors": NSNull()]]) })])
         }
-        note("Recolouring changes the colour in the panel's code when it is written there once; otherwise it is kept on the panel's line. Double-click a line, bar or point on the figure to recolour just it.")
+        note("Recoloring changes the color in the panel's code when it is written there once; otherwise it is kept on the panel's line. Double-click a line, bar or point on the figure to recolor just it.")
     }
 
     private func tipRows(_ e: Element, _ setp: @escaping ([String: Any]) -> Void) {
@@ -597,7 +625,7 @@ final class Inspector: NSView {
             row([("", check("Stroke", hasStroke) { setp(["stroke": $0 ? "#000000" : (NSNull() as Any)]) }), ("", color(e.s("stroke") ?? "#000000") { setp(["stroke": $0]) }),
                  ("", check("Fill", hasFill) { setp(["fill": $0 ? "#DDDDDD" : (NSNull() as Any)]) }), ("", color(e.s("fill") ?? "#DDDDDD") { setp(["fill": $0]) })])
         } else {
-            row([("Colour", color(e.s("color")) { setp(["color": $0]) })])
+            row([("Color", color(e.s("color")) { setp(["color": $0]) })])
         }
         row([("Width", numberField(e.p("width"), width: 40) { setp(["width": $0]) }), ("pt", NSView()),
              ("Dash", popup(["solid", "dashed", "dotted"], e.s("dash") ?? "solid", width: 80) { _, t in setp(["dash": t == "solid" ? (NSNull() as Any) : t]) })])
@@ -615,6 +643,28 @@ final class Inspector: NSView {
                 m.edit(["op": "set", "oid": e.oid, "props": ["label": t.isEmpty ? "auto" : t]]) })])
         row([("Nudge X", numberField(e.p("label_dx") ?? 0, width: 36) { m.edit(["op": "set", "oid": e.oid, "props": ["label_dx": $0 == 0 ? (NSNull() as Any) : $0]]) }),
              ("Y", numberField(e.p("label_dy") ?? 0, width: 36) { m.edit(["op": "set", "oid": e.oid, "props": ["label_dy": $0 == 0 ? (NSNull() as Any) : $0]]) }), ("mm", NSView())])
+        if let l = f.label(of: e.oid) { linkRow(l) }
+    }
+
+    /// Whether the label moves with its panel; unlinked, each moves on its own (double-clicking the label toggles it).
+    private func linkRow(_ label: Element) {
+        guard let m = main else { return }
+        add(check("Label moves with the panel", !label.detached) { on in m.edit(["op": "label_detach", "oid": label.oid, "detach": !on]) })
+    }
+
+    /// The table's cells, to type into: Return (or Apply) writes them to its file or code.
+    private func tableCells(_ e: Element) {
+        guard let m = main else { return }
+        let rows = m.canvas.tableDraftRows(e)
+        let grid = TableGrid(rows.isEmpty ? [[""]] : rows)
+        grid.onApply = { m.applyTableCells(e.oid, $0) }
+        add(grid)
+        func small(_ t: String, _ tip: String, _ f: @escaping () -> Void) -> NSButton { let b = button(t, f); b.toolTip = tip; return b }
+        row([("", small("+ Row", "Add a row at the bottom") { grid.reshape { $0.append(Array(repeating: "", count: $0.first?.count ?? 1)) } }),
+             ("", small("− Row", "Remove the bottom row") { grid.reshape { if $0.count > 1 { $0.removeLast() } } }),
+             ("", small("+ Col", "Add a column on the right") { grid.reshape { for i in $0.indices { $0[i].append("") } } }),
+             ("", small("− Col", "Remove the right column") { grid.reshape { for i in $0.indices where $0[i].count > 1 { $0[i].removeLast() } } })])
+        row([("", button("Apply Cells", symbol: "checkmark") { grid.apply() }), ("⇥ next cell · ↵ apply", NSView())])
     }
 
     private func labelOfPanel(_ f: FigureData, _ e: Element) {
@@ -624,7 +674,16 @@ final class Inspector: NSView {
              ("", button("Automatic") { m.edit(["op": "set", "oid": po, "props": ["label": "auto"]]) })])
         row([("Nudge X", numberField(panel.p("label_dx") ?? 0, width: 36) { m.edit(["op": "set", "oid": po, "props": ["label_dx": $0 == 0 ? (NSNull() as Any) : $0]]) }),
              ("Y", numberField(panel.p("label_dy") ?? 0, width: 36) { m.edit(["op": "set", "oid": po, "props": ["label_dy": $0 == 0 ? (NSNull() as Any) : $0]]) }), ("mm", NSView())])
-        note("Dragging a label moves every label, so they stay consistent; ⌥-drag nudges this one. Their look is set for all panels: deselect to see Panel labels.")
+        let ls = f.labelStyle
+        row([("Font", fontPicker(ls["font"] as? String, blank: "Style's font") { m.edit(["op": "labels", "props": ["font": $0 ?? (NSNull() as Any)]]) })])
+        row([("Size", numberField(num(ls["size"]), width: 40) { m.edit(["op": "labels", "props": ["size": $0]]) }), ("pt", NSView()),
+             ("", check("Bold", (ls["weight"] as? String) == "bold") { m.edit(["op": "labels", "props": ["weight": $0 ? "bold" : "normal"]]) }),
+             ("", check("Italic", (ls["style"] as? String) == "italic") { m.edit(["op": "labels", "props": ["style": $0 ? "italic" : "normal"]]) })])
+        row([("Color", color(ls["color"] as? String ?? "#000000") { m.edit(["op": "labels", "props": ["color": $0]]) })])
+        note("Font, size and color apply to every panel letter, so they match.")
+        linkRow(e)
+        note(e.detached ? "Unlinked: this label stays where it is when its panel moves, and dragging it moves only it. Double-click it to link it again."
+             : "Dragging a label moves every label, so they stay consistent; ⌥-drag nudges this one. Double-click a label to unlink it from its panel.")
         add(button("Remove This Label") { m.edit(["op": "delete", "oids": [e.oid]]) })
     }
 
@@ -635,7 +694,7 @@ final class Inspector: NSView {
             row([("To", popup(["Selection", "First selected", "Figure"], ["selection": "Selection", "key": "First selected", "figure": "Figure"][m.alignTo], width: 130) { i, _ in
                 m.alignTo = ["selection", "key", "figure"][i]; m.updateInspector() })])
         }
-        let h: [(String, String, String)] = [("align.horizontal.left", "Align Left Edges", "left"), ("align.horizontal.center", "Align Centres", "hcenter"),
+        let h: [(String, String, String)] = [("align.horizontal.left", "Align Left Edges", "left"), ("align.horizontal.center", "Align Centers", "hcenter"),
                                               ("align.horizontal.right", "Align Right Edges", "right"), ("align.vertical.top", "Align Tops", "top"),
                                               ("align.vertical.center", "Align Middles", "vcenter"), ("align.vertical.bottom", "Align Bottoms", "bottom")]
         row(h.map { s in ("", iconButton(s.0, s.1) { m.align(s.2, to: single ? "figure" : nil) }) })
@@ -713,7 +772,7 @@ final class Inspector: NSView {
     }
 }
 
-/// A small round colour swatch button (the project's palette).
+/// A small round color swatch button (the project's palette).
 final class SwatchButton: NSButton {
     private let swatch: NSColor
     init(color: NSColor) {
@@ -729,4 +788,95 @@ final class SwatchButton: NSButton {
         swatch.setFill(); NSBezierPath(ovalIn: r).fill()
         NSColor.separatorColor.setStroke(); let p = NSBezierPath(ovalIn: r); p.lineWidth = 1; p.stroke()
     }
+}
+
+
+/// A font family to pick from the Mac's fonts, or to type; an empty field means `blank` (the style's font).
+final class FontPicker: NSComboBox, NSComboBoxDelegate {
+    private var commit: ((String?) -> Void)?
+    private var initial = ""
+    private var blank: String?
+    static let families: [String] = NSFontManager.shared.availableFontFamilies.filter { !$0.hasPrefix(".") }.sorted()
+
+    convenience init(_ value: String?, blank: String?, width: CGFloat, commit: @escaping (String?) -> Void) {
+        self.init(frame: .zero)
+        self.commit = commit; self.blank = blank
+        initial = value ?? ""
+        stringValue = initial
+        placeholderString = blank
+        if let b = blank { addItem(withObjectValue: b) }
+        addItems(withObjectValues: FontPicker.families)
+        numberOfVisibleItems = 16; completes = true
+        font = Theme.font(11); controlSize = .small
+        delegate = self
+        widthAnchor.constraint(equalToConstant: width).isActive = true
+    }
+    private func fire() {
+        var v = stringValue.trimmingCharacters(in: .whitespaces)
+        if v == blank { v = ""; stringValue = "" }
+        guard v != initial else { return }
+        initial = v
+        commit?(v.isEmpty ? nil : v)
+    }
+    func comboBoxSelectionDidChange(_ n: Notification) {
+        guard indexOfSelectedItem >= 0, let v = itemObjectValue(at: indexOfSelectedItem) as? String else { return }
+        stringValue = v
+        fire()
+    }
+    func controlTextDidEndEditing(_ obj: Notification) { fire() }
+}
+
+/// A table's cells as text fields, for typing into (from Manimble's table editor).
+final class TableGrid: NSScrollView {
+    var onApply: (([[String]]) -> Void)?
+    private var cells: [[NSTextField]] = []
+    private var heightConstraint: NSLayoutConstraint?
+    private let avail: CGFloat = 212
+
+    init(_ rows: [[String]]) {
+        super.init(frame: .zero)
+        hasHorizontalScroller = true; hasVerticalScroller = true; autohidesScrollers = true
+        borderType = .noBorder; drawsBackground = false
+        widthAnchor.constraint(equalToConstant: avail).isActive = true
+        layout(rows)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    var draft: [[String]] { cells.map { $0.map(\.stringValue) } }
+
+    func layout(_ rows: [[String]]) {
+        let rows = rows.isEmpty ? [[""]] : rows
+        let nc = max(1, rows.map(\.count).max() ?? 1)
+        let gap: CGFloat = 3, h: CGFloat = 22
+        let w = max(54, ((avail - gap * CGFloat(nc - 1)) / CGFloat(nc)).rounded(.down))
+        let doc = FlippedView(frame: NSRect(x: 0, y: 0, width: CGFloat(nc) * w + CGFloat(nc - 1) * gap,
+                                            height: CGFloat(rows.count) * h + CGFloat(rows.count - 1) * gap))
+        cells = rows.enumerated().map { i, row in
+            (0..<nc).map { j in
+                let f = NSTextField(string: j < row.count ? row[j] : "")
+                f.frame = NSRect(x: CGFloat(j) * (w + gap), y: CGFloat(i) * (h + gap), width: w, height: h - 2)
+                f.font = i == 0 ? Theme.font(11, .semibold) : Theme.font(11)
+                f.cell?.isScrollable = true; f.cell?.wraps = false; f.controlSize = .small
+                f.target = self; f.action = #selector(applyPressed); f.cell?.sendsActionOnEndEditing = false
+                doc.addSubview(f)
+                return f
+            }
+        }
+        let flat = cells.flatMap { $0 }
+        for (k, f) in flat.enumerated() { f.nextKeyView = flat[(k + 1) % flat.count] }
+        documentView = doc
+        heightConstraint?.isActive = false
+        let bar: CGFloat = doc.frame.width > avail ? 14 : 0
+        heightConstraint = heightAnchor.constraint(equalToConstant: min(doc.frame.height, 240) + bar)
+        heightConstraint?.isActive = true
+    }
+
+    func reshape(_ change: (inout [[String]]) -> Void) {
+        var rows = draft
+        change(&rows)
+        guard !rows.isEmpty, !(rows.first?.isEmpty ?? true) else { NSSound.beep(); return }
+        layout(rows)
+    }
+    @objc private func applyPressed() { apply() }
+    func apply() { onApply?(draft) }
 }
