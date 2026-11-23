@@ -23,6 +23,7 @@ extension MainController {
             if ProcessInfo.processInfo.environment["FIGNIMBLE_SHOTS_SCENE"] == "journals" { await journalShots(dir); return }
             if ProcessInfo.processInfo.environment["FIGNIMBLE_SHOTS_SCENE"] == "audit" { await auditEditing(dir); return }
             if ProcessInfo.processInfo.environment["FIGNIMBLE_SHOTS_SCENE"] == "fresh" { await freshShots(dir); return }
+            if ProcessInfo.processInfo.environment["FIGNIMBLE_SHOTS_SCENE"] == "bcinfo" { await bioCartoonInfoShots(dir); return }
             shot(dir, "01-figure")
             canvas.selection = ["1"]
             await settle(); shot(dir, "02-panel-selected")
@@ -526,6 +527,37 @@ extension MainController {
         canvas.selection = []; window.makeFirstResponder(canvas); key("c"); await settle()
         check("⌘C with nothing selected: the figure as PDF and PNG", NSPasteboard.general.data(forType: .pdf) != nil && NSPasteboard.general.data(forType: .png) != nil)
         Engine.note("audit done: \(fails) failed")
+        NSApp.terminate(nil)
+    }
+
+    /// A BioCartoon icon (SVG, then PNG) placed and selected: the inspector shows its title, license and credit.
+    private func bioCartoonInfoShots(_ dir: String) async {
+        showBioCartoon(nil)
+        for _ in 0..<300 where biocartoonPane?.exe == nil { try? await Task.sleep(nanoseconds: 100_000_000) }
+        var svg = BCFilter(); svg.fileTypes = ["svg"]
+        var png = BCFilter(); png.fileTypes = ["png"]
+        var placed: [String] = []
+        for (q, filter) in [("C57 mouse", svg), ("mitochondria", png)] {
+            guard let exe = biocartoonPane?.exe, let icon = try? await BioCartoonCLI.search(exe, query: q, filter: filter, sort: "relevance", offset: 0, limit: 1).first,
+                  let data = try? JSONEncoder().encode(icon) else { Engine.note("bcinfo: no \(q)"); continue }
+            let n = figure?.elements.count ?? 0
+            _ = biocartoonDropped(data, at: CGPoint(x: 60 + Double(placed.count) * 60, y: 80))
+            for _ in 0..<200 where (figure?.elements.count ?? 0) == n { try? await Task.sleep(nanoseconds: 100_000_000) }
+            await settle()
+            if let e = figure?.elements.last { placed.append(e.oid) }
+        }
+        hideBioCartoon()
+        for (i, oid) in placed.enumerated() {
+            canvas.selection = [oid]
+            await settle()
+            let e = figure?.element(oid)
+            Engine.note("bcinfo: \(e?.s("source") ?? "-") origin \(e?.codeFile.flatMap { Inspector.bioCartoonOrigin($0) }?.license ?? "none")")
+            if let sv = inspector.descendants(NSScrollView.self).first, let doc = sv.documentView {
+                doc.scroll(NSPoint(x: 0, y: doc.isFlipped ? doc.bounds.height : 0))     // to the BioCartoon section
+            }
+            await settle()
+            shot(dir, "bcinfo-\(i)")
+        }
         NSApp.terminate(nil)
     }
 

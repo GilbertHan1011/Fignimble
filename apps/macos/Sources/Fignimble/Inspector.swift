@@ -100,6 +100,64 @@ final class Inspector: NSView {
         b.toolTip = title.isEmpty ? nil : title
         return b
     }
+    /// What a picture inserted from BioCartoon says about itself (the catalog record written into the file on
+    /// insert), read once per version of the file.
+    private static var origins: [String: (Date?, BCIcon?)] = [:]
+    static func bioCartoonOrigin(_ path: String) -> BCIcon? {
+        let date = (try? FileManager.default.attributesOfItem(atPath: path)[.modificationDate]) as? Date
+        if let (d, icon) = origins[path], d == date { return icon }
+        let icon = BioCartoonCLI.origin(ofImageAt: path)
+        origins[path] = (date, icon)
+        return icon
+    }
+
+    /// The license's page: Creative Commons ones from their SPDX name (CC-BY-4.0, CC-BY-SA-3.0, CC0-1.0).
+    static func licenseURL(_ license: String) -> URL? {
+        let l = license.uppercased()
+        if l.hasPrefix("CC0") { return URL(string: "https://creativecommons.org/publicdomain/zero/1.0/") }
+        guard let r = l.range(of: #"^CC-(BY(-NC)?(-SA|-ND)?)-(\d\.\d)$"#, options: .regularExpression) else { return nil }
+        let parts = String(l[r]).dropFirst(3).split(separator: "-")
+        return URL(string: "https://creativecommons.org/licenses/\(parts.dropLast().joined(separator: "-").lowercased())/\(parts.last!)/")
+    }
+
+    /// Selected picture from BioCartoon: where it comes from, its license and the credit the legend needs.
+    private func bioCartoonSection(_ icon: BCIcon) {
+        guard let m = main else { return }
+        section("BioCartoon")
+        func fact(_ name: String, _ value: String?) {
+            guard let v = value?.trimmingCharacters(in: .whitespaces), !v.isEmpty else { return }
+            let t = NSTextField(wrappingLabelWithString: v)
+            t.font = Theme.font(11); t.isSelectable = true; t.preferredMaxLayoutWidth = 160
+            row([(name, t)])
+        }
+        fact("Title", icon.title)
+        fact("Author", icon.author)
+        fact("Collection", icon.source_name ?? icon.source)
+        fact("License", icon.license)
+        fact("Category", icon.taxa?.map { $0.subcategory.isEmpty ? $0.category : "\($0.category) › \($0.subcategory)" }
+            .joined(separator: ", ") ?? icon.category)
+        fact("Tags", icon.tags?.joined(separator: ", "))
+        fact("ID", icon.id)
+        let credit = icon.credit ?? icon.title
+        let c = NSTextField(wrappingLabelWithString: credit)
+        c.font = Theme.font(10.5); c.textColor = .secondaryLabelColor; c.isSelectable = true; c.preferredMaxLayoutWidth = 220
+        add(c)
+        let lic = (icon.license ?? "").uppercased()
+        if lic.hasPrefix("CC-BY") { note("The license asks for this credit, in the figure legend or the acknowledgements.") }
+        else if lic.hasPrefix("CC0") { note("Public domain: no credit needed, though it is welcome.") }
+        else if lic.isEmpty { note("No license recorded: check the source before publishing.") }
+        var buttons: [(String, NSView)] = [("", button("Copy Credit", symbol: "doc.on.doc") {
+            BioCartoonCLI.copy(credit); m.toast("Copied the credit")
+        })]
+        if let u = icon.url, u.hasPrefix("http"), let url = URL(string: u) {
+            buttons.append(("", button("Open Page", symbol: "safari") { NSWorkspace.shared.open(url) }))
+        }
+        if let url = Inspector.licenseURL(icon.license ?? "") {
+            buttons.append(("", button("License", symbol: "checkmark.seal") { NSWorkspace.shared.open(url) }))
+        }
+        row(buttons)
+    }
+
     private func iconButton(_ symbol: String, _ tip: String, _ f: @escaping () -> Void) -> NSButton {
         let b = button("", symbol: symbol, f); b.toolTip = tip; b.bezelStyle = .texturedRounded
         return b
@@ -417,6 +475,7 @@ final class Inspector: NSView {
             row([("", button("Scale Bar…", symbol: "ruler") { m.addScaleBar(nil) }),
                  ("", button("Zoom Box", symbol: "plus.magnifyingglass") { m.addZoom(nil) })])
             panelLabelRows(f, e)
+            if let path = e.codeFile, let icon = Inspector.bioCartoonOrigin(path) { bioCartoonSection(icon) }
         case "text":
             section("Text")
             add(Field(e.s("text") ?? "", width: 220) { setp(["text": $0]) })
