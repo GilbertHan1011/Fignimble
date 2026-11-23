@@ -7,6 +7,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var launchURL: URL?
 
     static func main() {
+        // run by ssh as its SSH_ASKPASS program: one question in a dialog, then exit (SSHLogin.swift)
+        if ProcessInfo.processInfo.environment["FIGNIMBLE_ASKPASS"] != nil { SSH.askpassMain() }
         let app = NSApplication.shared
         let d = AppDelegate()
         app.delegate = d

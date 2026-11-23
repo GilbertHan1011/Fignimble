@@ -43,6 +43,8 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
     private(set) var python: String?
     /// The server the open project is on (nil: a project on this Mac), and the one the engine was started for.
     private(set) var remote: RemoteProject?
+    /// What the last remote project's Python lacked (the tunnel's needs_packages event), for openRemote.
+    private var remoteNeeds: [String: Any]?
     private var engineFor: RemoteProject?
     private var queue: Task<Void, Never>?
     private var nudgeTotal = CGPoint.zero
@@ -246,8 +248,8 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
             engine.onExit = { [weak self] code in
                 guard let self else { return }
                 if self.engineFor != nil && self.remote == nil { return }      // still connecting: openRemote says why
-                let what = self.remote.map { "The connection to \($0.host) closed" } ?? "The Fignimble engine stopped"
-                self.alert(what, "Exit status \(code). The end of its log (~/Library/Logs/fignimble.log):\n\n" + Engine.logTail())
+                if let r = self.remote { self.connectionLost(r); return }
+                self.alert("The Fignimble engine stopped", "Exit status \(code). The end of its log (~/Library/Logs/fignimble.log):\n\n" + Engine.logTail())
             }
             if let j = try? await engine.json("journals") { journals = j.compactMapValues { $0 as? [String: Any] } }
             runShotsIfAsked()
@@ -307,6 +309,8 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
             refresh()
         case "rendered":
             Task { await refreshState() }
+        case "needs_packages":                          // a server's Python lacks the engine's packages (tunnel.py)
+            remoteNeeds = e
         default: break
         }
     }
@@ -324,6 +328,21 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
     }
 
     /// The engine for a project here (nil) or on a server: the running one, or a new one in its place.
+    /// The connection to a project's server closed (the tunnel exits when it does): Reconnect opens it again, with
+    /// the same figure; edits that hadn't gone across are still in the mirror and go then.
+    private func connectionLost(_ r: RemoteProject) {
+        let a = NSAlert()
+        a.messageText = "The connection to \(r.host) closed"
+        a.informativeText = "Edits that hadn't reached \(r.host) yet are kept on this Mac and sent when you reconnect.\n\n"
+            + Engine.logTail(4)
+        a.addButton(withTitle: "Reconnect"); a.addButton(withTitle: "Close")
+        let fig = current
+        a.beginSheetModal(for: window) { [weak self] resp in
+            guard resp == .alertFirstButtonReturn, let self else { return }
+            self.openRemote(r, figure: fig)
+        }
+    }
+
     private func useEngine(for target: RemoteProject?) -> Bool {
         if engineFor == target && engine.isRunning { return true }
         guard let py = python else { return false }
@@ -359,16 +378,27 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
 
     /// A project on an SSH server: the engine started there (over ssh, by fignimble.tunnel), the project's files
     /// mirrored here.
-    func openRemote(_ r: RemoteProject) {
+    func openRemote(_ r: RemoteProject, figure fig: String? = nil) {
         if code.dirty { code.save() }
         enqueue { [self] in
+            busy("Logging in to \(r.host)…")
+            do { try await logIn(r.host) } catch {
+                idle()
+                if case SSH.Failure.canceled = error { return }
+                alert("Couldn't connect to \(r.host)", error.localizedDescription)
+                return
+            }
             busy("Connecting to \(r.host)…")
+            remoteNeeds = nil
             guard useEngine(for: r) else { idle(); return }
             do {
                 let res = try await engine.json("open", ["project": r.mirror])
                 project = res["project"] as? String ?? r.mirror
             } catch {
                 idle()
+                engine.shutdown(wait: 2)                  // the tunnel that couldn't start the engine there
+                engineFor = nil
+                if let needs = remoteNeeds { remoteNeeds = nil; missingRemotePackages(needs, for: r, error: error.localizedDescription); return }
                 alert("Couldn't open \(r.path) on \(r.host)", error.localizedDescription + "\n\n" + Engine.logTail(6))
                 return
             }
@@ -376,7 +406,32 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
             remote = r
             MainController.noteRecent(r.recentKey)
             window.representedURL = nil
-            await opened(title: r.title, figure: nil)
+            await opened(title: r.title, figure: fig)
+        }
+    }
+
+    /// The server's Python lacks the engine's packages: install them there with pip, or choose another Python.
+    private func missingRemotePackages(_ needs: [String: Any], for r: RemoteProject, error: String) {
+        let pip = needs["pip"] as? [String] ?? []
+        let a = NSAlert()
+        a.messageText = pip.isEmpty ? "\(r.python) on \(r.host) is too old" : "\(r.python) on \(r.host) doesn't have \(pip.joined(separator: ", "))"
+        a.informativeText = error
+        if !pip.isEmpty { a.addButton(withTitle: "Install") }
+        a.addButton(withTitle: "Choose Another Python…")
+        a.addButton(withTitle: "Cancel")
+        a.beginSheetModal(for: window) { [weak self] resp in
+            guard let self else { return }
+            let choice = resp.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue - (pip.isEmpty ? -1 : 0)
+            if choice == 0 {
+                self.enqueue { [weak self] in
+                    guard let self, await self.installRemotePackages(pip, python: r.python, host: r.host) else { return }
+                    self.openRemote(r)
+                }
+            } else if choice == 1 {
+                let d = RemoteDialog(main: self, mode: .project, prefill: r)
+                d.onOpenProject = { [weak self] p in self?.openRemote(p) }
+                d.begin()
+            }
         }
     }
 
@@ -569,7 +624,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
             self.pill.show(text ?? "Rendering…", symbol: nil, tint: nil, spinning: true, cancellable: false)
         }
     }
-    private func idle() { busyShown = false; pill.hide() }
+    func idle() { busyShown = false; pill.hide() }
     func toast(_ text: String, error: Bool = false) {
         busyShown = false
         pill.show(text, symbol: error ? "exclamationmark.triangle.fill" : "checkmark.circle.fill", tint: error ? .systemOrange : .systemGreen)

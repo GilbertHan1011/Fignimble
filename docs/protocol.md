@@ -56,6 +56,13 @@ in the mirror. In remote mode the engine also answers these commands, which only
 Each response also has `files: {path: base64}`, the pictures in the `.fignimble` cache that it names and that this
 connection hasn't sent yet. The tunnel writes them into the mirror before passing the response on.
 
+The app logs in to the server first and leaves a shared ssh connection open (`apps/macos/Sources/Fignimble/SSHLogin.swift`).
+`FIGNIMBLE_SSH_SHARE` names the folder of its socket, and every ssh the engine runs goes through it
+(`remote.ssh_command`). When the engine can't start on the server, the tunnel answers every request with that error
+until the app closes it. If the server's Python lacks the engine's packages, the error is preceded by the event
+`{event: "needs_packages", host, python, missing, pip}`, where `pip` lists what to install (empty when the Python
+is older than 3.10). When the connection drops, the tunnel exits with status 3 at once.
+
 ## Edit operations
 
 `set {oid, props}` (any arguments of the element's call; a label's `text`), `move {oids, dx, dy, labels?: "all"}`,
