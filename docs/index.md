@@ -87,6 +87,7 @@ and have the agent write panels while you watch the figure update.
 2. Follow the [quick start](getting-started/quick-start.md) to make a figure with two panels, letter it, style it
    for a journal and export it.
 3. Read [key concepts](getting-started/concepts.md) to see how figures, panels and the canvas fit together.
+4. See [a 37-panel Nature figure rebuilt](examples/nature-rebuild.md) from its authors' code and data.
 
 Fignimble is free and open source, from the [Pachter Lab](https://pachterlab.github.io) at Caltech. It is built on
 [Manimble](https://pachterlab.github.io/Manimble/), the slide editor for Manim presentations, and shares its engine

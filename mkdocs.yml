@@ -99,7 +99,9 @@ nav:
       - Colour and dark versions: guide/colour.md
       - Preflight and export: guide/export.md
   - AI agents and the terminal: ai/agents.md
-  - Example: examples.md
+  - Examples:
+      - The demo figure: examples.md
+      - Rebuilding a Nature figure: examples/nature-rebuild.md
   - Reference:
       - Python API: reference/python-api.md
       - The fignimble command: reference/cli.md

@@ -1,0 +1,5 @@
+# what the panels import besides matplotlib and numpy; Fignimble offers to install these
+pandas
+seaborn>=0.13
+statsmodels
+scipy

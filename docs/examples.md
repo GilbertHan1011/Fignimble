@@ -1,4 +1,4 @@
-# Example
+# The demo figure
 
 The repository's [`examples/demo`](https://github.com/pachterlab/Fignimble/tree/main/examples/demo) project is a
 six-panel figure: an expression time course, a UMAP, a correlation heatmap, a micrograph, a schematic and a bar chart
@@ -41,3 +41,5 @@ Things to try:
 - **View ▸ Colour Vision ▸ Deuteranopia**.
 - Open the terminal and ask an agent to add a seventh panel.
 
+For a large, real figure, see [rebuilding a Nature figure](examples/nature-rebuild.md): 37 panels, lettered a to ak,
+from the authors' published code and data.

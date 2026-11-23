@@ -255,5 +255,7 @@ engine/fignimble/   api.py       the figure language (Figure, Labels, Style)
                  cli.py       the fignimble command
 apps/macos/      the macOS app (Swift, AppKit, SwiftTerm)
 examples/demo/   a project to try
+examples/kohl2025-ed5/   a 37-panel Nature figure (Cao et al. 2025, Extended Data Fig. 5) rebuilt from its authors'
+                 code and data (CC BY 4.0)
 tests/           engine tests
 ```
