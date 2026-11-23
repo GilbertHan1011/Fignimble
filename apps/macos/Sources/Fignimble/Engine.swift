@@ -10,6 +10,7 @@ enum EngineError: Error, LocalizedError {
 final class Engine {
     private var proc: Process?
     private var stdin: FileHandle?
+    private var out: Pipe?
     private var nextID = 1
     private var pending: [Int: CheckedContinuation<Data, Error>] = [:]
     private let lock = NSLock()
@@ -105,10 +106,16 @@ final class Engine {
         return Bundle.main.bundleURL.deletingLastPathComponent().appendingPathComponent("../../engine").standardizedFileURL.path
     }
 
-    func start(python: String) throws {
+    /// Start the engine: here, or for a project on an SSH server, fignimble.tunnel, which starts it there and keeps
+    /// the project's mirror (RemoteProject).
+    func start(python: String, remote: RemoteProject? = nil) throws {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: python)
-        p.arguments = ["-u", "-m", "fignimble.rpc"]
+        if let r = remote {
+            p.arguments = ["-u", "-m", "fignimble.tunnel", "--host", r.host, "--path", r.path, "--mirror", r.mirror, "--python", r.python]
+        } else {
+            p.arguments = ["-u", "-m", "fignimble.rpc"]
+        }
         var env = ProcessInfo.processInfo.environment
         env["PYTHONPATH"] = Engine.enginePath()
         env["FIGNIMBLE_PYTHON"] = python
@@ -138,7 +145,21 @@ final class Engine {
         }
         try p.run()
         proc = p
+        out = outPipe
         stdin = inPipe.fileHandleForWriting
+    }
+
+    /// End the engine, its input first so it can tidy up (a tunnel sends its last changes to the server), and fail
+    /// whatever still waits for an answer; `start` can follow.
+    func shutdown(wait seconds: Double) {
+        finishInput()
+        let deadline = Date().addingTimeInterval(seconds)
+        while isRunning && Date() < deadline { usleep(50_000) }
+        stop()
+        out?.fileHandleForReading.readabilityHandler = nil
+        out = nil
+        lock.lock(); let waiting = pending; pending = [:]; buffer = Data(); lock.unlock()
+        for c in waiting.values { c.resume(throwing: EngineError.message("The Fignimble engine stopped")) }
     }
 
     var isRunning: Bool { proc?.isRunning ?? false }

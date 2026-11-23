@@ -32,6 +32,7 @@ extension MainController {
         Task { @MainActor in
             if ProcessInfo.processInfo.environment["FIGNIMBLE_SHOTS_SCENE"] == "blank" { await blankShots(dir); return }
             if ProcessInfo.processInfo.environment["FIGNIMBLE_SHOTS_SCENE"] == "window" { windowReport(dir); return }
+            if ProcessInfo.processInfo.environment["FIGNIMBLE_SHOTS_SCENE"] == "remote" { await remoteShots(dir); return }
             // with FIGNIMBLE_TEST_SETUP the Python is set up first, which takes a while
             let wait = ProcessInfo.processInfo.environment["FIGNIMBLE_TEST_SETUP"] != nil ? 3000 : 300
             for _ in 0..<wait where figure == nil { try? await Task.sleep(nanoseconds: 100_000_000) }
@@ -326,6 +327,44 @@ extension MainController {
     }
 
     /// Started with no project: the empty window, File ▸ Open Recent, then a recent project opened from it.
+    /// A project on an SSH server (FIGNIMBLE_SSH: a stand-in whose home holds proj/): the Open dialog, the project
+    /// opened, an edit that lands on the server. FIGNIMBLE_SHOTS_PYTHON: the Python "there".
+    private func remoteShots(_ dir: String) async {
+        for _ in 0..<100 where python == nil { try? await Task.sleep(nanoseconds: 100_000_000) }
+        let env = ProcessInfo.processInfo.environment
+        let d = RemoteDialog(main: self, mode: .project)
+        var chosen: RemoteProject?
+        d.onOpenProject = { chosen = $0 }
+        d.begin()
+        try? await Task.sleep(nanoseconds: 800_000_000)
+        if let host = d.panel.contentView?.firstDescendant(NSComboBox.self) { host.stringValue = "lab-server" }
+        let fields = d.panel.contentView?.descendants(NSTextField.self) ?? []
+        fields.first(where: { $0.placeholderString?.hasPrefix("folder") == true })?.stringValue = "~/proj"
+        fields.first(where: { $0.placeholderString?.hasPrefix("python3") == true })?.stringValue = env["FIGNIMBLE_SHOTS_PYTHON"] ?? "python3"
+        d.list()
+        try? await Task.sleep(nanoseconds: 2_500_000_000)
+        if let v = d.panel.contentView, let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) {
+            v.cacheDisplay(in: v.bounds, to: rep)
+            try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: dir).appendingPathComponent("R1-open-dialog.png"))
+        }
+        d.perform(Selector(("doImport")))
+        guard let r = chosen else { Engine.note("remote: the dialog chose nothing"); NSApp.terminate(nil); return }
+        Engine.note("remote: chose \(r.host):\(r.path) with \(r.python), mirror \(r.mirror)")
+        openRemote(r)
+        for _ in 0..<600 where figure == nil { try? await Task.sleep(nanoseconds: 100_000_000) }
+        await settle(); shot(dir, "R2-remote-project")
+        Engine.note("remote: title \(window.title) project \(project ?? "-") figure \(figure?.file ?? "-") elements \(figure?.elements.count ?? 0) sprites on disk \(figure?.elements.filter { $0.sprite.map { FileManager.default.fileExists(atPath: $0.file) } ?? false }.count ?? 0)")
+        if let p = figure?.elements.first(where: { $0.kind == "panel" }) {
+            canvas.selection = [p.oid]
+            nudge(dx: 2, dy: 0)
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            await settle(); shot(dir, "R3-after-move")
+            Engine.note("remote: moved \(p.oid) from \(p.box) to \(figure?.element(p.oid)?.box ?? .zero)")
+        }
+        Engine.note("remote: recent \(MainController.recentProjects.first ?? "-")")
+        NSApp.terminate(nil)
+    }
+
     private func blankShots(_ dir: String) async {
         try? await Task.sleep(nanoseconds: 4_000_000_000)
         shot(dir, "B1-empty")

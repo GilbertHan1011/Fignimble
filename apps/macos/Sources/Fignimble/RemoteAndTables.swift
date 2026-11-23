@@ -158,14 +158,20 @@ extension MainController {
 }
 
 /// Insert ▸ Panel from SSH Server…: a host (from ~/.ssh/config, or typed), a folder there, its folders and .py files.
+/// File ▸ Open Project on SSH Server… (`.project`): the same, to open the listed folder as the project, with the
+/// Python on the server that draws it.
 /// ssh can't ask for a password here, so the server must take a key (or an agent's, or a ControlMaster connection).
 @MainActor
 final class RemoteDialog: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSComboBoxDelegate {
+    enum Mode { case panel, project }
     weak var main: MainController?
+    let mode: Mode
     var onImport: ((String, String) -> Void)?
+    var onOpenProject: ((RemoteProject) -> Void)?
     let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 520, height: 440), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
     private let host = NSComboBox()
     private let folder = NSTextField()
+    private let python = NSTextField()
     private let table = NSTableView()
     private let status = NSTextField(wrappingLabelWithString: "")
     private let importButton = NSButton(title: "Import", target: nil, action: nil)
@@ -173,10 +179,11 @@ final class RemoteDialog: NSObject, NSTableViewDataSource, NSTableViewDelegate, 
     private var path = ""
     private var keep: RemoteDialog?
 
-    init(main: MainController) {
+    init(main: MainController, mode: Mode = .panel) {
         self.main = main
+        self.mode = mode
         super.init()
-        let title = NSTextField(labelWithString: "Panel from an SSH server")
+        let title = NSTextField(labelWithString: mode == .project ? "Open a project on an SSH server" : "Panel from an SSH server")
         title.font = Theme.font(13, .semibold)
         host.placeholderString = "user@server or a Host from ~/.ssh/config"
         host.completes = true; host.delegate = self
@@ -191,19 +198,28 @@ final class RemoteDialog: NSObject, NSTableViewDataSource, NSTableViewDelegate, 
         table.rowHeight = 22; table.target = self; table.doubleAction = #selector(opened)
         let scroll = NSScrollView(); scroll.documentView = table; scroll.hasVerticalScroller = true; scroll.borderType = .bezelBorder
         status.font = Theme.font(10.5); status.textColor = .secondaryLabelColor; status.preferredMaxLayoutWidth = 480
-        status.stringValue = "Fignimble connects with your SSH key (ssh can't ask for a password here). The panel's code is copied into panels/; right-click it ▸ Update from Server to fetch it again."
+        status.stringValue = mode == .project
+            ? "Fignimble connects with your SSH key (ssh can't ask for a password here). The figures are drawn on the server, with its Python and data; you edit them here. List a folder, then Open."
+            : "Fignimble connects with your SSH key (ssh can't ask for a password here). The panel's code is copied into panels/; right-click it ▸ Update from Server to fetch it again."
         let cancel = NSButton(title: "Cancel", target: self, action: #selector(cancel)); cancel.keyEquivalent = "\u{1b}"
         importButton.target = self; importButton.action = #selector(doImport); importButton.isEnabled = false
+        if mode == .project { importButton.title = "Open" }
+        python.placeholderString = "python3, or the path of an environment's python on the server"
+        python.stringValue = RemoteProject.python(for: host.stringValue)
+        python.toolTip = "It needs matplotlib, pymupdf and pillow (Python 3.10 or newer), and whatever the panels' code imports"
         let hostRow = NSStackView(views: [NSTextField(labelWithString: "Server:"), host])
         let folderRow = NSStackView(views: [NSTextField(labelWithString: "Folder:"), folder, go])
+        let pythonRow = NSStackView(views: [NSTextField(labelWithString: "Python there:"), python])
         let buttons = NSStackView(views: [NSView(), cancel, importButton])
-        let stack = NSStackView(views: [title, hostRow, folderRow, scroll, status, buttons])
+        let rows: [NSView] = mode == .project ? [title, hostRow, folderRow, pythonRow, scroll, status, buttons]
+                                              : [title, hostRow, folderRow, scroll, status, buttons]
+        let stack = NSStackView(views: rows)
         stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 8
         stack.edgeInsets = NSEdgeInsets(top: 14, left: 16, bottom: 14, right: 16)
         stack.translatesAutoresizingMaskIntoConstraints = false
         panel.contentView = NSView()
         panel.contentView!.addSubview(stack)
-        for v in [hostRow, folderRow, scroll, status, buttons] { v.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -32).isActive = true }
+        for v in rows where v !== title { v.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -32).isActive = true }
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: panel.contentView!.leadingAnchor), stack.trailingAnchor.constraint(equalTo: panel.contentView!.trailingAnchor),
             stack.topAnchor.constraint(equalTo: panel.contentView!.topAnchor), stack.bottomAnchor.constraint(equalTo: panel.contentView!.bottomAnchor),
@@ -246,7 +262,10 @@ final class RemoteDialog: NSObject, NSTableViewDataSource, NSTableViewDelegate, 
             if path != "/" { entries.insert(("..", true), at: 0) }
             table.reloadData()
             let n = entries.filter { !$0.dir }.count
-            status.stringValue = "\(h):\(path): \(n) Python file\(n == 1 ? "" : "s"). Double-click a folder to open it, a .py file to import it."
+            status.stringValue = mode == .project
+                ? "\(h):\(path): \(n) Python file\(n == 1 ? "" : "s"). Double-click a folder to go into it; Open opens this one as the project."
+                : "\(h):\(path): \(n) Python file\(n == 1 ? "" : "s"). Double-click a folder to open it, a .py file to import it."
+            if mode == .project { importButton.isEnabled = true }
             var recent = UserDefaults.standard.stringArray(forKey: "sshHosts") ?? []
             recent.removeAll { $0 == h }; recent.insert(h, at: 0)
             UserDefaults.standard.set(Array(recent.prefix(10)), forKey: "sshHosts")
@@ -262,10 +281,19 @@ final class RemoteDialog: NSObject, NSTableViewDataSource, NSTableViewDelegate, 
     @objc private func opened() {
         let r = table.clickedRow
         guard r >= 0, r < entries.count else { return }
-        if entries[r].dir { load(child(entries[r].name)) } else { doImport() }
+        if entries[r].dir { load(child(entries[r].name)) } else if mode == .panel { doImport() }
     }
 
     @objc private func doImport() {
+        if mode == .project {
+            let h = host.stringValue.trimmingCharacters(in: .whitespaces)
+            guard !h.isEmpty, !path.isEmpty else { return }
+            let py = python.stringValue.trimmingCharacters(in: .whitespaces)
+            RemoteProject.remember(python: py.isEmpty ? "python3" : py, for: h)
+            main?.window.endSheet(panel)
+            onOpenProject?(RemoteProject(host: h, path: path, python: py.isEmpty ? "python3" : py))
+            return
+        }
         let r = table.selectedRow
         guard r >= 0, r < entries.count, !entries[r].dir else { return }
         let h = host.stringValue.trimmingCharacters(in: .whitespaces), p = child(entries[r].name)
@@ -276,6 +304,9 @@ final class RemoteDialog: NSObject, NSTableViewDataSource, NSTableViewDelegate, 
     func comboBoxSelectionDidChange(_ n: Notification) {
         DispatchQueue.main.async { [self] in
             folder.stringValue = UserDefaults.standard.string(forKey: "sshFolder:" + host.stringValue) ?? ""
+            python.stringValue = RemoteProject.python(for: host.stringValue)
+            path = ""
+            if mode == .project { importButton.isEnabled = false }
         }
     }
 
@@ -292,6 +323,7 @@ final class RemoteDialog: NSObject, NSTableViewDataSource, NSTableViewDelegate, 
         return cell
     }
     func tableViewSelectionDidChange(_ n: Notification) {
+        guard mode == .panel else { return }
         let r = table.selectedRow
         importButton.isEnabled = r >= 0 && r < entries.count && !entries[r].dir
     }

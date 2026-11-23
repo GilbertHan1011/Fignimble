@@ -1783,12 +1783,14 @@ class Session:
         while dest.exists():
             n += 1
             dest = self.project / "panels" / f"{Path(name).stem}-{n}.py"
-        with tempfile.TemporaryDirectory() as tmp:
-            try:
-                got = remote.fetch(host, path, Path(tmp) / name)
-            except remote.RemoteError as exc:
-                return {"ok": False, "error": f"couldn't fetch {host}:{path}: {exc}"}
-            text = got.read_text(encoding="utf-8", errors="replace")
+        text = a.get("text")                          # fetched already (by the tunnel, on the Mac)
+        if text is None:
+            with tempfile.TemporaryDirectory() as tmp:
+                try:
+                    got = remote.fetch(host, path, Path(tmp) / name)
+                except remote.RemoteError as exc:
+                    return {"ok": False, "error": f"couldn't fetch {host}:{path}: {exc}"}
+                text = got.read_text(encoding="utf-8", errors="replace")
         try:
             ast.parse(text)
         except SyntaxError as exc:
@@ -1807,12 +1809,14 @@ class Session:
         where = remote.origin(path.read_text(encoding="utf-8", errors="replace")) if path.exists() else None
         if where is None:
             return {"ok": False, "error": f"{path.name} wasn't fetched from a server"}
-        with tempfile.TemporaryDirectory() as tmp:
-            try:
-                got = remote.fetch(where[0], where[1], Path(tmp) / path.name)
-            except remote.RemoteError as exc:
-                return {"ok": False, "error": f"couldn't fetch {where[0]}:{where[1]}: {exc}"}
-            text = got.read_text(encoding="utf-8", errors="replace")
+        text = a.get("text")                          # fetched already (by the tunnel, on the Mac)
+        if text is None:
+            with tempfile.TemporaryDirectory() as tmp:
+                try:
+                    got = remote.fetch(where[0], where[1], Path(tmp) / path.name)
+                except remote.RemoteError as exc:
+                    return {"ok": False, "error": f"couldn't fetch {where[0]}:{where[1]}: {exc}"}
+                text = got.read_text(encoding="utf-8", errors="replace")
         return self.write_source({"file": str(path), "text": remote.with_header(text, *where), "figure": a.get("figure"),
                                   "pxPerMM": a.get("pxPerMM")})
 

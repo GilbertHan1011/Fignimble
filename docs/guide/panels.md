@@ -88,7 +88,8 @@ Deprecation and other warnings from a panel's code are kept with the panel inste
 **Insert ▸ Panel from SSH Server…** lists a folder on a server (hosts come from `~/.ssh/config`) and copies the panel
 code you pick into `panels/`, its first line saying where it came from. Right-click the panel ▸ **Update from Server**
 fetches it again, as one undo step. Fignimble connects with your SSH key, an ssh-agent, or a connection you opened in
-the terminal with ControlMaster; it can't type a password. Data the panel reads has to be copied too.
+the terminal with ControlMaster; it can't type a password. Data the panel reads has to be copied too. To work on a whole
+project where it is, with its data, open it on the server instead: [Projects on an SSH server](remote.md).
 
 ## Dark mode in panel code
 

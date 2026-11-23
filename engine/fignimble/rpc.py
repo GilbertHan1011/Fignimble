@@ -14,7 +14,7 @@ import threading
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 
-from . import templates
+from . import mirror, remote, templates
 from .core import Session
 
 _out = os.fdopen(os.dup(1), "w", buffering=1, encoding="utf-8")
@@ -31,6 +31,7 @@ def send(obj):
 def main():
     python = os.environ.get("FIGNIMBLE_PYTHON") or sys.executable
     app = {"s": None}
+    far = mirror.Remote() if mirror.enabled() else None      # on a server, for the tunnel (mirror.py)
 
     def need() -> Session:
         if app["s"] is None:
@@ -41,7 +42,10 @@ def main():
         old = app["s"]
         if old:
             old.close()
-        s = Session(a["project"], python)
+        where = os.path.expanduser(a["project"])
+        if far and not os.path.isabs(where):           # a server folder as typed: from the home folder
+            where = os.path.join(os.path.expanduser("~"), where)
+        s = Session(where, python)
         s.on_event = send
         app["s"] = s
         return {"ok": True, "project": str(s.project)}
@@ -56,6 +60,15 @@ def main():
         if res["ok"] and app["s"]:
             app["s"].restart_renderer()
         return res
+
+    def remote_list(a):
+        try:
+            return {"ok": True, **remote.list_dir(a["host"], a.get("path") or "")}
+        except remote.RemoteError as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def project():
+        return app["s"].project if app["s"] else None
 
     def close(a):
         if app["s"]:
@@ -82,7 +95,7 @@ def main():
         "export": lambda a: need().export(a),
         "export_table": lambda a: need().export_table(a),
         "remote_hosts": lambda a: {"hosts": __import__("fignimble.remote", fromlist=["hosts"]).hosts()},
-        "remote_list": lambda a: need().remote_list(a),
+        "remote_list": remote_list,
         "import_remote": lambda a: need().import_remote(a),
         "update_remote": lambda a: need().update_remote(a),
         "new_figure": lambda a: need().new_figure(a),
@@ -93,12 +106,24 @@ def main():
         "journals": lambda a: {k: {**j, "rank": i} for i, (k, j) in
                                enumerate(__import__("fignimble.journals", fromlist=["JOURNALS"]).JOURNALS.items())},
     }
+    if far:
+        handlers.update({
+            "manifest": lambda a: mirror.manifest(need().project),
+            "read_files": lambda a: far.read_files(project(), a),
+            "write_file": lambda a: far.write_file(need().project, a),
+            "delete_file": lambda a: far.delete_file(need().project, a),
+            "upload": far.upload,
+            "staging_path": far.staging_path,
+        })
     pool = ThreadPoolExecutor(max_workers=6)
 
     def run(req):
         try:
             res = handlers[req["cmd"]](req)
-            send({"id": req["id"], "result": res})
+            msg = {"id": req["id"], "result": res}
+            if far:
+                msg["files"] = far.attach(res, app["s"].cache if app["s"] else None)
+            send(msg)
         except BaseException as exc:  # noqa: BLE001
             traceback.print_exc()
             send({"id": req.get("id"), "error": str(exc)})
@@ -113,6 +138,8 @@ def main():
                 pool.submit(run, req)
     if app["s"]:
         app["s"].close()
+    if far:
+        far.close()
 
 
 if __name__ == "__main__":

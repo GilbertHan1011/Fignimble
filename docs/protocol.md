@@ -32,6 +32,30 @@ Coordinates are millimetres from the figure's top-left corner, y down.
 | `import_remote` | `figure`, `host`, `path`, `x`, `y` | as `import_file`, plus `file`: the panel code copied into `panels/` |
 | `update_remote` | `file`, `figure?` | as `write_source`: the panel code fetched again from where its first line says |
 
+`import_remote` and `update_remote` also take `text`, the panel's code when it was fetched already (the tunnel
+fetches it from the Mac).
+
+### A project on an SSH server
+
+For a project on a server the app starts `python -m fignimble.tunnel --host H --path FOLDER --mirror LOCAL --python
+PY` instead. The tunnel takes the same requests. It starts `fignimble.rpc` on the server over ssh, with
+`FIGNIMBLE_REMOTE=1`, and keeps a mirror of the project's code, tables and pictures in LOCAL
+(`engine/fignimble/tunnel.py`). The app sends `open` with LOCAL as the project, and every path it sends or gets is
+in the mirror. In remote mode the engine also answers these commands, which only the tunnel uses
+(`engine/fignimble/mirror.py`):
+
+| cmd | arguments | result |
+|---|---|---|
+| `manifest` | | `{files: {path: [mtime_ns, size]}}`: the project files the mirror keeps |
+| `read_files` | `paths` (relative, or in the staging folder) | `{files: {path: {data (base64), stat} \| null}}` |
+| `write_file` | `path`, `data`, `expect` (`[mtime_ns, size]` or null) | `{ok, stat}`, or `{ok: false, conflict, stat}` when the file isn't as expected |
+| `delete_file` | `path`, `expect` | `{ok}` or `{ok: false, conflict, stat}` |
+| `upload` | `name`, `data` | `{path}`: a file from the Mac, in the staging folder |
+| `staging_path` | `name` | `{path}`: where an export goes before the tunnel fetches it |
+
+Each response also has `files: {path: base64}`, the pictures in the `.fignimble` cache that it names and that this
+connection hasn't sent yet. The tunnel writes them into the mirror before passing the response on.
+
 ## Edit operations
 
 `set {oid, props}` (any arguments of the element's call; a label's `text`), `move {oids, dx, dy, labels?: "all"}`,

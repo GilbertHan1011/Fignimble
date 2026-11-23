@@ -63,11 +63,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let names = recent.map { ($0 as NSString).lastPathComponent }
         for p in recent {
             let name = (p as NSString).lastPathComponent
-            // the same folder name twice: say where each is
-            let title = names.filter { $0 == name }.count > 1 ? "\(name) — \((p as NSString).deletingLastPathComponent.replacingOccurrences(of: NSHomeDirectory(), with: "~"))" : name
-            let it = NSMenuItem(title: title, action: #selector(MainController.openRecent(_:)), keyEquivalent: "")
-            it.representedObject = p; it.toolTip = p
-            it.image = NSWorkspace.shared.icon(forFile: p); it.image?.size = NSSize(width: 16, height: 16)
+            let it: NSMenuItem
+            if let r = RemoteProject(recentKey: p) {             // a project on an SSH server
+                it = NSMenuItem(title: r.title, action: #selector(MainController.openRecent(_:)), keyEquivalent: "")
+                it.toolTip = "\(r.host):\(r.path)"
+                it.image = NSImage(systemSymbolName: "server.rack", accessibilityDescription: "SSH server")
+            } else {
+                // the same folder name twice: say where each is
+                let title = names.filter { $0 == name }.count > 1 ? "\(name) — \((p as NSString).deletingLastPathComponent.replacingOccurrences(of: NSHomeDirectory(), with: "~"))" : name
+                it = NSMenuItem(title: title, action: #selector(MainController.openRecent(_:)), keyEquivalent: "")
+                it.toolTip = p
+                it.image = NSWorkspace.shared.icon(forFile: p); it.image?.size = NSSize(width: 16, height: 16)
+            }
+            it.representedObject = p
             menu.addItem(it)
         }
         if recent.isEmpty { menu.addItem(NSMenuItem(title: "No Recent Projects", action: nil, keyEquivalent: "")) }
@@ -110,7 +118,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                         item("Quit Fignimble", #selector(NSApplication.terminate(_:)), "q", to: NSApp)])
         menu("File", [item("New Project…", #selector(MainController.newProject(_:)), "n", [.command, .shift]),
                       item("New Figure…", #selector(MainController.newFigure(_:)), "n"),
-                      item("Open Project…", #selector(MainController.openProject(_:)), "o"), recentMenu(), sep(),
+                      item("Open Project…", #selector(MainController.openProject(_:)), "o"),
+                      item("Open Project on SSH Server…", #selector(MainController.openRemoteProject(_:)), "o", [.command, .shift]),
+                      recentMenu(), sep(),
                       item("Apply Code Changes", #selector(MainController.saveCode(_:)), "s"),
                       item("Show Project in Finder", #selector(MainController.revealProject(_:))), sep(),
                       item("Export Figure…", #selector(MainController.exportFigure(_:)), "e"),

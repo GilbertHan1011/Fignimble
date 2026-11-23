@@ -40,7 +40,10 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
     var alignTo = "selection"
     /// The canvas shows the figure's dark version.
     private(set) var darkPreview = false
-    private var python: String?
+    private(set) var python: String?
+    /// The server the open project is on (nil: a project on this Mac), and the one the engine was started for.
+    private(set) var remote: RemoteProject?
+    private var engineFor: RemoteProject?
     private var queue: Task<Void, Never>?
     private var nudgeTotal = CGPoint.zero
     private var nudgeWork: DispatchWorkItem?
@@ -238,9 +241,13 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
             python = py
             TerminalSession.python = py
             do { try engine.start(python: py) } catch { alert("Couldn't start the engine", error.localizedDescription); return }
+            engineFor = nil
             engine.onEvent = { [weak self] e in self?.event(e) }
             engine.onExit = { [weak self] code in
-                self?.alert("The Fignimble engine stopped", "Exit status \(code). The end of its log (~/Library/Logs/fignimble.log):\n\n" + Engine.logTail())
+                guard let self else { return }
+                if self.engineFor != nil && self.remote == nil { return }      // still connecting: openRemote says why
+                let what = self.remote.map { "The connection to \($0.host) closed" } ?? "The Fignimble engine stopped"
+                self.alert(what, "Exit status \(code). The end of its log (~/Library/Logs/fignimble.log):\n\n" + Engine.logTail())
             }
             if let j = try? await engine.json("journals") { journals = j.compactMapValues { $0 as? [String: Any] } }
             runShotsIfAsked()
@@ -316,6 +323,20 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         }
     }
 
+    /// The engine for a project here (nil) or on a server: the running one, or a new one in its place.
+    private func useEngine(for target: RemoteProject?) -> Bool {
+        if engineFor == target && engine.isRunning { return true }
+        guard let py = python else { return false }
+        engine.shutdown(wait: engineFor == nil ? 2 : 15)
+        project = nil; remote = nil
+        do { try engine.start(python: py, remote: target) } catch {
+            alert("Couldn't start the engine", error.localizedDescription); return false
+        }
+        engineFor = target
+        TerminalSession.remote = target
+        return true
+    }
+
     func openProject(at url: URL) {
         var dir = url, fig: String?
         var isDir: ObjCBool = false
@@ -323,25 +344,55 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         if !isDir.boolValue { dir = url.deletingLastPathComponent(); fig = url.deletingPathExtension().lastPathComponent }
         if code.dirty { code.save() }
         enqueue { [self] in
+            guard useEngine(for: nil) else { return }
             do {
                 let r = try await engine.json("open", ["project": dir.path])
                 project = r["project"] as? String ?? dir.path
             } catch { alert("Couldn't open \(dir.lastPathComponent)", error.localizedDescription); return }
+            remote = nil
             MainController.noteRecent(project ?? dir.path)
             NSDocumentController.shared.noteNewRecentDocumentURL(dir)
-            window.title = "Fignimble — " + dir.lastPathComponent
             window.representedURL = dir
-            current = nil; figure = nil
-            canvas.selection = []
-            code.clear()
-            await refreshState()
-            if terminal.hasStarted { terminal.start(in: dir.path, original: nil) }
-            let name = fig ?? (figures.first?["name"] as? String)
-            if let n = name { await load(n) } else { canvas.setFigure(nil); inspector.update(); status.stringValue = "No figures yet: File ▸ New Figure (⌘N)." }
-            fitWindowToScreen()
-            explainProjectOnce()
-            checkPackages(asked: false)
+            await opened(title: dir.lastPathComponent, figure: fig)
         }
+    }
+
+    /// A project on an SSH server: the engine started there (over ssh, by fignimble.tunnel), the project's files
+    /// mirrored here.
+    func openRemote(_ r: RemoteProject) {
+        if code.dirty { code.save() }
+        enqueue { [self] in
+            busy("Connecting to \(r.host)…")
+            guard useEngine(for: r) else { idle(); return }
+            do {
+                let res = try await engine.json("open", ["project": r.mirror])
+                project = res["project"] as? String ?? r.mirror
+            } catch {
+                idle()
+                alert("Couldn't open \(r.path) on \(r.host)", error.localizedDescription + "\n\n" + Engine.logTail(6))
+                return
+            }
+            idle()
+            remote = r
+            MainController.noteRecent(r.recentKey)
+            window.representedURL = nil
+            await opened(title: r.title, figure: nil)
+        }
+    }
+
+    /// After a project opened: its figures, the first (or `fig`) on the canvas.
+    private func opened(title: String, figure fig: String?) async {
+        window.title = "Fignimble — " + title
+        current = nil; figure = nil
+        canvas.selection = []
+        code.clear()
+        await refreshState()
+        if terminal.hasStarted, let p = project { terminal.start(in: p, original: nil) }
+        let name = fig ?? (figures.first?["name"] as? String)
+        if let n = name { await load(n) } else { canvas.setFigure(nil); inspector.update(); status.stringValue = "No figures yet: File ▸ New Figure (⌘N)." }
+        fitWindowToScreen()
+        explainProjectOnce()
+        checkPackages(asked: false)
     }
 
     @objc func checkPackagesNow(_ sender: Any?) { checkPackages(asked: true) }
@@ -982,7 +1033,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         let d = UserDefaults.standard
         // before Open Recent there was only the last project
         let r = d.stringArray(forKey: "recentProjects") ?? d.string(forKey: "lastProject").map { [$0] } ?? []
-        return r.filter { FileManager.default.fileExists(atPath: $0) }
+        return r.filter { $0.hasPrefix("ssh:") || FileManager.default.fileExists(atPath: $0) }
     }
     static func noteRecent(_ path: String) {
         var r = (UserDefaults.standard.stringArray(forKey: "recentProjects") ?? []).filter { $0 != path }
@@ -991,6 +1042,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
     }
     @objc func openRecent(_ sender: NSMenuItem) {
         guard let p = sender.representedObject as? String else { return }
+        if let r = RemoteProject(recentKey: p) { openRemote(r); return }
         guard FileManager.default.fileExists(atPath: p) else { toast("\(p) is no longer there", error: true); return }
         openProject(at: URL(fileURLWithPath: p))            // which applies unsaved code first, as Open Project does
     }
