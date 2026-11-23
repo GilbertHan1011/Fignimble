@@ -108,7 +108,9 @@ def main(argv=None):
         rz = res["resolution"]
         for n in rz.get("notes", []):
             print("note:", n)
-        if rz.get("dpi"):
+        if rz.get("dpi") and "kind" not in rz:            # pptx: the slide's picture, not checked against a journal
+            print(f"resolution: {rz['dpi']} dpi")
+        elif rz.get("dpi"):
             print(f"resolution: {rz['dpi']} dpi ({rz['kind']} figure; {rz['need'][rz['kind']]} dpi asked)")
         elif rz.get("pictures"):
             print(f"resolution: vector, pictures at {rz['pictures']} dpi or more ({rz['need']['photo']} dpi asked)")
