@@ -99,10 +99,11 @@ superscripts all came from it.
 
 ## Credit and license
 
-The article, its figures, and the authors' code and data are licensed under the
+The article and its figures are licensed under the
 [Creative Commons Attribution 4.0 International License](https://creativecommons.org/licenses/by/4.0/), © The
 Author(s) 2025. The published figure on this page is Extended Data Fig. 5 of the article, unchanged. The rebuild
-adapts it and the code and data in `NPS_ephys` of the authors' repository: the notebook cells were rewritten as
-Fignimble panel functions, the figure was assembled in Fignimble, the schematics were redrawn, and the fixes above
-were applied. It is shared under the same license. The schematics use "C57 MOUSE" by Long Li (SciDraw) and
+adapts it, using the authors' code and data in `NPS_ephys` of
+[FrancisCrickInstitute/negative_parental_switch](https://github.com/FrancisCrickInstitute/negative_parental_switch):
+the notebook cells were rewritten as Fignimble panel functions, the figure was assembled in Fignimble, the schematics
+were redrawn, and the fixes above were applied. The schematics use "C57 MOUSE" by Long Li (SciDraw) and
 "Rat pup P1" by Antonis Asiminas (SciDraw), both CC BY 4.0, from BioCartoon.
