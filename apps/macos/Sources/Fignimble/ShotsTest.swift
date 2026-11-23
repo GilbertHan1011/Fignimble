@@ -442,13 +442,22 @@ extension MainController {
 
         // --- the code pane ---
         showCodePane(nil); await settle()
+        // ⌥⌘E toggles: if the drawer was already showing the code, that closed it
+        if code.textView?.isHiddenOrHasHiddenAncestor == true { showCodePane(nil); await settle() }
         if let tv = code.textView {
+            // the file it shows may still be loading on a first run (nothing cached): wait until it holds still
+            for _ in 0..<50 {
+                let before = tv.string
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                if !before.isEmpty && before == tv.string { break }
+            }
             window.makeFirstResponder(tv)
             let text = tv.string
             key("a")
             check("code pane ⌘A selects all its text", tv.selectedRange() == NSRange(location: 0, length: (text as NSString).length))
             key("c")
-            check("code pane ⌘C copies it", pbString() == text)
+            check("code pane ⌘C copies it", pbString() == text,
+                  "clipboard \(pbString().prefix(60).debugDescription) (\(pbString().count)) vs text \(text.prefix(60).debugDescription) (\(text.count)), responder \(String(describing: type(of: window.firstResponder ?? NSResponder())))")
             tv.setSelectedRange(NSRange(location: 0, length: 0))
             setPB("# pasted by the audit\n")
             key("v")
