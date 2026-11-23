@@ -4,11 +4,34 @@ import AppKit
 /// (after Manimble's ShotsTest): `FIGNIMBLE_SHOTS=/some/folder Fignimble.app/Contents/MacOS/Fignimble <project>`.
 /// It edits the project it is given, so give it a copy.
 extension MainController {
+    /// Where the window is against its screen, and the smallest size its views allow (the window must fit a 13"
+    /// MacBook Air): FIGNIMBLE_SHOTS_SCENE=window.
+    func windowReport(_ dir: String) {
+        Task { @MainActor in
+            for _ in 0..<300 where figure == nil { try? await Task.sleep(nanoseconds: 100_000_000) }
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            let vis = (window.screen ?? NSScreen.main)?.visibleFrame ?? .zero
+            let fit = window.contentView?.fittingSize ?? .zero
+            var s = "window \(window.frame)\nscreen visible \(vis)\ncontent fitting \(fit)\nminSize \(window.minSize)\n"
+            s += "contentMinSize \(window.contentMinSize)\n"
+            for v in window.contentView?.subviews ?? [] { s += "  \(type(of: v)) \(v.frame) fitting \(v.fittingSize)\n" }
+            // the smallest the window goes: asked for 900 x 560, where does it end up
+            window.setFrame(NSRect(x: vis.minX, y: vis.minY, width: 900, height: 560), display: true)
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            window.contentView?.layoutSubtreeIfNeeded()
+            s += "shrunk to \(window.frame)\n"
+            for v in window.contentView?.subviews ?? [] { s += "  \(type(of: v)) \(v.frame)\n" }
+            try? s.write(toFile: dir + "/window.txt", atomically: true, encoding: .utf8)
+            NSApp.terminate(nil)
+        }
+    }
+
     func runShotsIfAsked() {
         guard let dir = ProcessInfo.processInfo.environment["FIGNIMBLE_SHOTS"] else { return }
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         Task { @MainActor in
             if ProcessInfo.processInfo.environment["FIGNIMBLE_SHOTS_SCENE"] == "blank" { await blankShots(dir); return }
+            if ProcessInfo.processInfo.environment["FIGNIMBLE_SHOTS_SCENE"] == "window" { windowReport(dir); return }
             // with FIGNIMBLE_TEST_SETUP the Python is set up first, which takes a while
             let wait = ProcessInfo.processInfo.environment["FIGNIMBLE_TEST_SETUP"] != nil ? 3000 : 300
             for _ in 0..<wait where figure == nil { try? await Task.sleep(nanoseconds: 100_000_000) }
@@ -24,6 +47,7 @@ extension MainController {
             if ProcessInfo.processInfo.environment["FIGNIMBLE_SHOTS_SCENE"] == "audit" { await auditEditing(dir); return }
             if ProcessInfo.processInfo.environment["FIGNIMBLE_SHOTS_SCENE"] == "fresh" { await freshShots(dir); return }
             if ProcessInfo.processInfo.environment["FIGNIMBLE_SHOTS_SCENE"] == "bcinfo" { await bioCartoonInfoShots(dir); return }
+            if ProcessInfo.processInfo.environment["FIGNIMBLE_SHOTS_SCENE"] == "v04" { await v04Shots(dir); return }
             shot(dir, "01-figure")
             canvas.selection = ["1"]
             await settle(); shot(dir, "02-panel-selected")
@@ -147,15 +171,15 @@ extension MainController {
         NSApp.terminate(nil)
     }
 
-    /// Colours (open the project at fig1.py): a panel's colours, the colour-vision preview, recolouring, a palette.
+    /// Colors (open the project at fig1.py): a panel's colors, the color-vision preview, recoloring, a palette.
     private func colorShots(_ dir: String) async {
         canvas.selection = ["5"]
-        await settle(); shot(dir, "K1-panel-colours")
+        await settle(); shot(dir, "K1-panel-colors")
         canvas.vision = "deuteranopia"
         await settle(); shot(dir, "K2-deuteranopia")
         canvas.vision = "normal"
         edit(["op": "panel_color", "oid": "5", "keys": ["ax0.patch2", "ax0.patch3"], "color": "#0072B2", "old": "#D1495B"])
-        await settle(); shot(dir, "K3-recoloured")
+        await settle(); shot(dir, "K3-recolored")
         canvas.selection = []
         edit(["op": "style", "props": ["palette": "okabe-ito"]])
         await settle(); shot(dir, "K4-okabe-ito")
@@ -590,6 +614,66 @@ extension MainController {
             await settle(); await settle()
             report(name); shot(dir, "fresh-\(name)")
         }
+        NSApp.terminate(nil)
+    }
+
+    /// The caption tab, a label unlinked from its panel, grid and guides, a new table typed into:
+    /// FIGNIMBLE_SHOTS_SCENE=v04 (open the project at fig1.py).
+    private func v04Shots(_ dir: String) async {
+        func log(_ t: String) { Engine.note("v04: " + t); try? (t + "\n").data(using: .utf8).map { d in
+            if let h = FileHandle(forWritingAtPath: dir + "/v04.log") { h.seekToEndOfFile(); h.write(d); h.closeFile() }
+            else { FileManager.default.createFile(atPath: dir + "/v04.log", contents: d) } } }
+        showCaption(nil)
+        captionPane.text.string = "Figure 1 | Gene expression in treated cells. a, Expression over time."
+        captionPane.commit()
+        await settle(); shot(dir, "V1-caption")
+        log("caption=\(figure?.caption ?? "-")")
+        // unlink label a by double-clicking it, then move its panel: the label stays
+        guard let lab = figure?.labels.first, let panel = lab.panelOid else { log("no label"); return }
+        let c = CGPoint(x: lab.box.midX, y: lab.box.midY)
+        mouse(.leftMouseDown, c); mouse(.leftMouseUp, c)
+        mouse(.leftMouseDown, c, clicks: 2); mouse(.leftMouseUp, c, clicks: 2)
+        await settle()
+        log("detached=\(figure?.label(of: panel)?.detached ?? false)")
+        canvas.selection = [panel]
+        edit(["op": "move", "oids": [panel], "dx": 8, "dy": 6])
+        await settle(); shot(dir, "V2-label-unlinked")
+        log("label box before \(lab.box) after \(figure?.label(of: panel)?.box ?? .zero)")
+        // grid lines and guides
+        canvas.showGrid = true
+        addVerticalGuide(nil); addHorizontalGuide(nil)
+        await settle(); shot(dir, "V3-grid-guides")
+        log("guides=\(figure?.guides.count ?? 0)")
+        canvas.showGrid = false
+        clearGuides(nil)
+        await settle()
+        // a panel letter selected: its font, size and color
+        if let l = figure?.labels.dropFirst().first { canvas.selection = [l.oid] }
+        await settle(); shot(dir, "V3b-label-inspector")
+        // a new 5-row table, typed into on the figure: double-click a cell, type, Tab, type
+        let r = try? await engine.json("new_table", ["name": "table", "rows": 5, "cols": 3])
+        if let n = r?["name"] as? String { await refreshState(); await loadFigure(n) }
+        await settle()
+        if let t = figure?.elements.first(where: { $0.kind == "table" }) {
+            canvas.selection = [t.oid]
+            log("rows shown=\(t.gridRows.count) cells=\(t.tableCells)")
+            await settle(); shot(dir, "V4a-new-table")
+            if let b = t.tableCellBox(1, 0) {
+                let c = CGPoint(x: b.midX, y: b.midY)
+                mouse(.leftMouseDown, c); mouse(.leftMouseUp, c)
+                mouse(.leftMouseDown, c, clicks: 2); mouse(.leftMouseUp, c, clicks: 2)
+                for word in ["CD3E", "2.4", "0.001", "GAPDH"] {
+                    if let ed = window.firstResponder as? NSTextView {
+                        ed.string = word
+                        ed.doCommand(by: #selector(NSResponder.insertTab(_:)))
+                    } else { log("no cell editor") }
+                }
+                window.makeFirstResponder(canvas)
+            }
+        }
+        await settle(); await settle(); shot(dir, "V4-table")
+        log("cells now=\(figure?.elements.first?.tableCells ?? [])")
+        log("table figure=\(figure?.isTableFigure ?? false) size=\(figure?.size ?? .zero)")
         NSApp.terminate(nil)
     }
 

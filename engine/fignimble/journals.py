@@ -1,6 +1,6 @@
 """Figure sizes, label conventions and resolutions of journals, the computational biology ones especially.
 
-Widths are in millimetres. `dpi` is the least resolution, as printed, asked of raster figures and of the pictures
+Widths are in millimeters. `dpi` is the least resolution, as printed, asked of raster figures and of the pictures
 inside vector ones: "photo" for photographs and micrographs alone (halftones), "combination" for pictures with text
 or line art, "line" for line art alone (plots, diagrams, text). Export never goes below them.
 

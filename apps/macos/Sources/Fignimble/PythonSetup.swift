@@ -1,7 +1,7 @@
 import AppKit
 
 /// The first-launch setup: runs setup_python.sh (Contents/Resources) in a sheet with its steps, the download's
-/// progress and the end of its output, which can be cancelled. `done(true)` once the Python is in place.
+/// progress and the end of its output, which can be canceled. `done(true)` once the Python is in place.
 @MainActor
 final class PythonSetup: NSObject {
     private let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 480, height: 230), styleMask: [.titled], backing: .buffered, defer: false)
@@ -12,7 +12,7 @@ final class PythonSetup: NSObject {
     private var process: Process?
     private var buffer = ""
     private var tail: [String] = []
-    private var cancelled = false
+    private var canceled = false
     private var keep: PythonSetup?
     private var done: ((Bool) -> Void)?
 
@@ -107,7 +107,7 @@ final class PythonSetup: NSObject {
     }
 
     @objc private func cancel() {
-        cancelled = true
+        canceled = true
         process?.terminate()
     }
 
@@ -116,7 +116,7 @@ final class PythonSetup: NSObject {
         self.done = nil
         bar.stopAnimation(nil)
         panel.sheetParent?.endSheet(panel)
-        if !ok && !cancelled {
+        if !ok && !canceled {
             let a = NSAlert()
             a.messageText = "Python couldn't be set up"
             a.informativeText = (why ?? (tail + [buffer]).filter { !$0.isEmpty }.suffix(6).joined(separator: "\n"))
@@ -124,7 +124,7 @@ final class PythonSetup: NSObject {
             a.addCopyButton()
             a.runModal()
         }
-        Engine.note(ok ? "python set up" : (cancelled ? "python setup cancelled" : "python setup failed: \(tail.last ?? why ?? "")"))
+        Engine.note(ok ? "python set up" : (canceled ? "python setup canceled" : "python setup failed: \(tail.last ?? why ?? "")"))
         done(ok)
         keep = nil
     }

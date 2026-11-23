@@ -5,13 +5,13 @@ A figure file makes one `Figure` and places elements on it, one call per element
     from fignimble import *
 
     fig = Figure(width=183, height=100, style=Style.journal("nature"))
-    fig.panel("panels/expression.py", x=0, y=0, w=90, h=50)          # labelled a
-    fig.panel("panels/umap.py", x=93, y=0, w=90, h=50)               # labelled b
-    fig.image("images/gel.png", x=0, y=53, w=60)                     # labelled c
+    fig.panel("panels/expression.py", x=0, y=0, w=90, h=50)          # labeled a
+    fig.panel("panels/umap.py", x=93, y=0, w=90, h=50)               # labeled b
+    fig.image("images/gel.png", x=0, y=53, w=60)                     # labeled c
     fig.text("Treated", x=70, y=60, size=7)
     fig.arrow(65, 70, 85, 70)
 
-Units are millimetres, measured from the figure's top-left corner, y pointing down (as in Illustrator).
+Units are millimeters, measured from the figure's top-left corner, y pointing down (as in Illustrator).
 These calls only record what the figure contains; the renderer (`fignimble.render`) draws it. Each call remembers
 the line of code that made it, so Fignimble's editor can change that line when the element is moved on the canvas.
 """
@@ -32,7 +32,7 @@ _DARK = [False]
 
 _STYLE: list = [None]                  # the style of the figure being drawn
 
-# named palettes: Style(palette="okabe-ito"). The first four are safe for colour-blind readers.
+# named palettes: Style(palette="okabe-ito"). The first four are safe for color-blind readers.
 PALETTES = {
     "okabe-ito": ["#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#000000"],
     "tol-bright": ["#4477AA", "#EE6677", "#228833", "#CCBB44", "#66CCEE", "#AA3377", "#BBBBBB"],
@@ -45,7 +45,7 @@ PALETTES = {
 
 
 def palette_colors(pal) -> dict:
-    """A palette (a name, a list or a dict) as {name: colour}, list entries named by their number."""
+    """A palette (a name, a list or a dict) as {name: color}, list entries named by their number."""
     if isinstance(pal, str):
         pal = PALETTES.get(pal.lower())
         if pal is None:
@@ -56,7 +56,7 @@ def palette_colors(pal) -> dict:
 
 
 def color(name, default: str | None = None) -> str:
-    """A colour of the project's palette (Style(palette=...)) by name, or by number for a list."""
+    """A color of the project's palette (Style(palette=...)) by name, or by number for a list."""
     st = _STYLE[0]
     pal = st.props.get("palette") if st is not None else None
     try:
@@ -70,7 +70,7 @@ def color(name, default: str | None = None) -> str:
         pass
     if default is not None:
         return default
-    raise KeyError(f"no colour {name!r} in the style's palette")
+    raise KeyError(f"no color {name!r} in the style's palette")
 
 
 _CACHE: dict = {}                      # what cached() kept in this process: shared by the panels of a render
@@ -133,7 +133,7 @@ def cached(*files):
 
 
 def is_dark() -> bool:
-    """True while a panel is drawn for the dark version of its figure: panel code that picks its own colours can
+    """True while a panel is drawn for the dark version of its figure: panel code that picks its own colors can
     pick ones that read on black (`"white" if is_dark() else "black"`)."""
     return _DARK[0]
 
@@ -177,7 +177,7 @@ def _alpha(n: int) -> str:
 
 
 class Labels:
-    """How panels are labelled (a, b, c ... or A, B, C ...), the same way on every panel.
+    """How panels are labeled (a, b, c ... or A, B, C ...), the same way on every panel.
 
     format    the label around the letter: "{}" -> a, "({})" -> (a), "{})" -> a), "{}." -> a.
     case      "lower" or "upper"
@@ -236,9 +236,9 @@ class Style:
     min_dpi   the lowest resolution (dots per inch, as printed) the preflight check accepts for pictures
     align_axes line up the plot areas of panels that share an edge (a row's tops and bottoms, a column's left
               and right sides), as patchwork does, whatever their tick labels
-    palette   the project's colours: a list, {"WT": "#999999", "KO": "#d1495b"}, or the name of one of fignimble's
+    palette   the project's colors: a list, {"WT": "#999999", "KO": "#d1495b"}, or the name of one of fignimble's
               (PALETTES: "okabe-ito", "tol-bright", "tol-muted", "tol-vibrant", "colorbrewer-set2", ...). The
-              colours panels plot with in turn, offered as swatches in the editor, and color("KO") in panel code
+              colors panels plot with in turn, offered as swatches in the editor, and color("KO") in panel code
     """
 
     def __init__(self, font: str = "Arial", size: float = 7, linewidth: float = 0.6, labels: Labels | None = None,
@@ -330,10 +330,11 @@ class Panel(Node):
     kind = "panel"
 
     def __init__(self, source, function: str = "draw", args: dict | None = None, label="auto",
-                 label_dx: float | None = None, label_dy: float | None = None, texts: dict | None = None,
+                 label_dx: float | None = None, label_dy: float | None = None,
+                 label_x: float | None = None, label_y: float | None = None, texts: dict | None = None,
                  colors: dict | None = None, rotation: float = 0, name: str | None = None, text_style: dict | None = None):
         self.props = dict(source=source if callable(source) else str(source), function=function,
-                          args=dict(args or {}), label=label, label_dx=label_dx, label_dy=label_dy,
+                          args=dict(args or {}), label=label, label_dx=label_dx, label_dy=label_dy, label_x=label_x, label_y=label_y,
                           texts=dict(texts or {}), colors=dict(colors or {}), rotation=rotation, name=name,
                           text_style=dict(text_style or {}))
         self.site = _site()
@@ -345,11 +346,12 @@ class Image(Node):
     kind = "image"
 
     def __init__(self, source: str, fit: str = "contain", crop: tuple | None = None, label="auto",
-                 label_dx: float | None = None, label_dy: float | None = None, opacity: float = 1.0,
+                 label_dx: float | None = None, label_dy: float | None = None,
+                 label_x: float | None = None, label_y: float | None = None, opacity: float = 1.0,
                  rotation: float = 0, flip: str | None = None, name: str | None = None):
         self.props = dict(source=str(source), fit=fit, crop=tuple(crop) if crop else None, label=label,
-                          label_dx=label_dx, label_dy=label_dy, opacity=opacity, rotation=rotation, flip=flip,
-                          name=name)
+                          label_dx=label_dx, label_dy=label_dy, label_x=label_x, label_y=label_y, opacity=opacity,
+                          rotation=rotation, flip=flip, name=name)
         self.site = _site()
         self.method = "Image"
 
@@ -482,7 +484,7 @@ class Figure:
 
     width, height  in mm. With `journal` (and `columns`) and no width, the journal's column width.
     style          a Style shared by every panel (font, sizes, labels); `labels` overrides its Labels
-    background     page colour ("#FFFFFF"), or None for transparent
+    background     page color ("#FFFFFF"), or None for transparent
     """
 
     def __init__(self, width: float | None = None, height: float = 120, style: Style | None = None,
@@ -499,6 +501,8 @@ class Figure:
         self.labels = labels or style.labels
         self.elements: list[Element] = []
         self.guides: list[dict] = []
+        self.caption_text: str | None = None
+        self.caption_site = None
         self.site = _site()
         _FIGURES.append(self)
 
@@ -514,6 +518,7 @@ class Figure:
 
     def panel(self, source, x: float = 0, y: float = 0, w: float = 80, h: float = 60, function: str = "draw",
               args: dict | None = None, label="auto", label_dx: float | None = None, label_dy: float | None = None,
+                 label_x: float | None = None, label_y: float | None = None,
               texts: dict | None = None, colors: dict | None = None, rotation: float = 0, group: str | None = None, name: str | None = None, locked: bool = False, hidden: bool = False,
               text_style: dict | None = None) -> Element:
         """A panel drawn by Python code. `source` is a .py file (path relative to the project) whose `function`
@@ -525,11 +530,12 @@ class Figure:
 
         `args` are passed to it as keyword arguments, so one panel file can draw several panels. Resizing the
         panel redraws it at the new size, so its text keeps its size. `label` is "auto" (the next letter), a
-        string of your own ("a'"), or None (no label); `label_dx`/`label_dy` move this panel's label only.
+        string of your own ("a'"), or None (no label); `label_dx`/`label_dy` move this panel's label only, and
+        `label_x`/`label_y` (mm, on the figure) unhook it: it stays there when the panel moves.
         `texts` replaces texts the code draws ({"ax0.xlabel": "Time (min)", "ax0.xtick2": "10³"}), which is how
-        the editor retypes a text the code doesn't hold as a literal; `text_style` sets such a text's size, colour,
+        the editor retypes a text the code doesn't hold as a literal; `text_style` sets such a text's size, color,
         weight and slant ({"ax0.legend1": {"size": 8, "color": "#D55E00", "weight": "bold", "style": "italic"}});
-        `colors` likewise recolours lines, bars and points ({"ax0.line1": "#0072B2"}); `rotation` turns the panel
+        `colors` likewise recolors lines, bars and points ({"ax0.line1": "#0072B2"}); `rotation` turns the panel
         (90, 180, 270).
         """
         if callable(source):
@@ -537,14 +543,15 @@ class Figure:
         else:
             src = str(source)
         return self._add("panel", "panel", dict(source=src, x=x, y=y, w=w, h=h, function=function, args=dict(args or {}),
-                                                label=label, label_dx=label_dx, label_dy=label_dy,
+                                                label=label, label_dx=label_dx, label_dy=label_dy, label_x=label_x, label_y=label_y,
                                                 texts=dict(texts or {}), colors=dict(colors or {}), rotation=rotation,
                                                 text_style=dict(text_style or {}), group=group,
                                                 name=name, locked=locked, hidden=hidden))
 
     def image(self, source: str, x: float = 0, y: float = 0, w: float = 60, h: float | None = None,
               fit: str = "contain", crop: tuple | None = None, label="auto", label_dx: float | None = None,
-              label_dy: float | None = None, opacity: float = 1.0, rotation: float = 0, flip: str | None = None,
+              label_dy: float | None = None, label_x: float | None = None, label_y: float | None = None,
+              opacity: float = 1.0, rotation: float = 0, flip: str | None = None,
               group: str | None = None,
               name: str | None = None, locked: bool = False, hidden: bool = False) -> Element:
         """A picture as a panel: PNG, JPEG, TIFF (raster) or PDF, SVG (vector, kept as vector). Without `h`, the
@@ -554,7 +561,8 @@ class Figure:
         `flip` mirrors it ("h" or "v")."""
         return self._add("image", "image", dict(source=str(source), x=x, y=y, w=w, h=h, fit=fit,
                                                 crop=tuple(crop) if crop else None, label=label, label_dx=label_dx,
-                                                label_dy=label_dy, opacity=opacity, rotation=rotation, flip=flip,
+                                                label_dy=label_dy, label_x=label_x, label_y=label_y, opacity=opacity,
+                                                rotation=rotation, flip=flip,
                                                 group=group, name=name, locked=locked, hidden=hidden))
 
     # --- annotations ---
@@ -562,7 +570,7 @@ class Figure:
     def text(self, text: str, x: float = 0, y: float = 0, size: float | None = None, weight: str = "normal",
              style: str = "normal", color: str = "#000000", align: str = "left", rotation: float = 0,
              font: str | None = None, width: float | None = None, opacity: float = 1.0, group: str | None = None, name: str | None = None, locked: bool = False, hidden: bool = False) -> Element:
-        """Text. (x, y) is the top-left of the text (top-centre or top-right with align "center" / "right").
+        """Text. (x, y) is the top-left of the text (top-center or top-right with align "center" / "right").
         Size in pt; default the style's size. `width` (mm) makes it a text box whose lines wrap.
         Markup: **bold**, *italic*, ^{superscript}, _{subscript} (in the style's font), and matplotlib's math:
         "$\\alpha$-actin". A line break is "\\n"."""
@@ -574,19 +582,22 @@ class Figure:
 
     def table(self, source: str | None = None, x: float = 0, y: float = 0, w: float | None = None,
               rows: list | None = None, header: bool = True, size: float | None = None, decimals=None,
-              align=None, font: str | None = None, color: str = "#000000", group: str | None = None,
-              name: str | None = None, locked: bool = False, hidden: bool = False) -> Element:
+              align=None, font: str | None = None, color: str = "#000000", grid: bool = False,
+              group: str | None = None, name: str | None = None, locked: bool = False,
+              hidden: bool = False) -> Element:
         """A table from a .csv, .tsv or .txt file (`source`, relative to the project) or from `rows` ([["Gene",
         "n"], ["CD3E", 12], ...]). (x, y) is its top-left; `w` (mm) widens it (it is never narrower than its text).
         The first row is the header (`header=False`: none). `decimals` rounds numbers with decimals (2, or
         [None, 0, 2, 3] per column); `align` is "lrr"
-        (left/centre/right per column), else numbers go right and words left. Size in pt; default the style's.
-        Rules above and below the header and at the bottom, as in a printed paper. Journals want tables as text:
+        (left/center/right per column), else numbers go right and words left. Size in pt; default the style's.
+        Rules above and below the header and at the bottom, as in a printed paper; `grid=True` draws a line between
+        every row and column and around the table instead (in `color`). Journals want tables as text:
         the editor's Export Table as Word (and `fignimble table`) writes it as a .docx."""
         return self._add("table", "table", dict(source=None if source is None else str(source), x=x, y=y, w=w,
                                                 rows=None if rows is None else [list(r) for r in rows],
                                                 header=header, size=size, decimals=decimals, align=align, font=font,
-                                                color=color, group=group, name=name, locked=locked, hidden=hidden))
+                                                color=color, grid=grid, group=group, name=name, locked=locked,
+                                                hidden=hidden))
 
     def line(self, x1: float, y1: float, x2: float, y2: float, width: float = 0.5, color: str = "#000000",
              arrow: str | None = None, dash: str | None = None, head: float = 1.6, curve: float = 0,
@@ -614,6 +625,7 @@ class Figure:
     def rect(self, x: float, y: float, w: float, h: float, stroke: str | None = "#000000", fill: str | None = None,
              width: float = 0.5, radius: float = 0, dash: str | None = None, opacity: float = 1.0,
              label=None, label_dx: float | None = None, label_dy: float | None = None,
+                 label_x: float | None = None, label_y: float | None = None,
              group: str | None = None, name: str | None = None, locked: bool = False, hidden: bool = False) -> Element:
         """A rectangle; `radius` (mm) rounds its corners. stroke/fill None: no outline / no fill. `label` "auto"
         letters it like a panel (a schematic drawn on it, say), or is a letter of its own; None (the default): no
@@ -621,7 +633,7 @@ class Figure:
         props = dict(x=x, y=y, w=w, h=h, stroke=stroke, fill=fill, width=width, radius=radius, dash=dash,
                      opacity=opacity, group=group, name=name, locked=locked, hidden=hidden)
         if label is not None:
-            props.update(label=label, label_dx=label_dx, label_dy=label_dy)
+            props.update(label=label, label_dx=label_dx, label_dy=label_dy, label_x=label_x, label_y=label_y)
         return self._add("rect", "rect", props)
 
     def ellipse(self, x: float, y: float, w: float, h: float, stroke: str | None = "#000000",
@@ -635,7 +647,7 @@ class Figure:
                 width: float = 0.5, color: str = "#000000", group: str | None = None,
                 name: str | None = None, locked: bool = False, hidden: bool = False) -> Element:
         """A significance bracket from x1 to x2 at height y, its ends dropping `tick` mm, with `text` ("*",
-        "**", "n.s.", "P = 0.003") centred above it."""
+        "**", "n.s.", "P = 0.003") centered above it."""
         return self._add("bracket", "bracket", dict(x1=x1, x2=x2, y=y, text=str(text), tick=tick, size=size,
                                                     width=width, color=color, group=group, name=name, locked=locked, hidden=hidden))
 
@@ -715,10 +727,18 @@ class Figure:
     def legend(self, entries: dict, x: float = 0, y: float = 0, ncol: int = 1, title: str | None = None,
                size: float | None = None, marker: str | None = None, group: str | None = None,
                name: str | None = None, locked: bool = False, hidden: bool = False) -> Element:
-        """A legend of its own, shared by several panels: {"label": colour or {"color", "marker", "linestyle",
+        """A legend of its own, shared by several panels: {"label": color or {"color", "marker", "linestyle",
         "kind": "line"|"patch"|"marker"}}. (x, y) is its top-left corner."""
         return self._add("legend", "legend", dict(entries=dict(entries), x=x, y=y, ncol=ncol, title=title,
                                                   size=size, marker=marker, group=group, name=name, locked=locked, hidden=hidden))
+
+    # --- the caption (shown under the figure in the editor's Caption tab, never drawn on it) ---
+
+    def caption(self, text: str):
+        """The figure's caption: free text for the paper, kept with the figure but not drawn on it. The editor's
+        Caption tab edits it."""
+        self.caption_text = str(text)
+        self.caption_site = _site()
 
     # --- layout aids (shown in the editor, never exported) ---
 

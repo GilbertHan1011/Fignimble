@@ -23,7 +23,15 @@ def read_rows(source: str | Path) -> list[list[str]]:
             delim = csv.Sniffer().sniff(text[:4096], delimiters=",\t;|").delimiter
         except csv.Error:
             delim = ","
-    return [r for r in csv.reader(io.StringIO(text), delimiter=delim) if any(c.strip() for c in r)]
+    # rows of empty cells stay (a table still to be filled in); only blank lines go
+    return [r for r in csv.reader(io.StringIO(text), delimiter=delim) if r]
+
+
+def write_delimited(rows: list, delimiter: str = ",") -> str:
+    """The rows as CSV (or TSV with a tab) text."""
+    buf = io.StringIO()
+    csv.writer(buf, delimiter=delimiter, lineterminator="\n").writerows([["" if c is None else c for c in r] for r in rows])
+    return buf.getvalue()
 
 
 def _number(s) -> float | None:
@@ -90,9 +98,10 @@ _W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 
 
 def write_docx(rows: list, path: str | Path, header: bool = True, decimals=None, align=None,
-               font: str = "Arial", size: float = 7, title: str | None = None) -> str:
+               font: str = "Arial", size: float = 7, title: str | None = None, grid: bool = False) -> str:
     """Write the table to a Word file: a real table (editable in Word), the figure's font and size, the header
-    bold, a rule above and below the header and one at the bottom. `title` goes above it as a paragraph."""
+    bold, a rule above and below the header and one at the bottom (`grid`: lines between every row and column and
+    around the table). `title` goes above it as a paragraph."""
     shown, auto = cells(rows, header, decimals)
     al = resolve_align(align, auto)
     half = max(2, int(round(size * 2)))                     # Word sizes are in half points
@@ -113,7 +122,11 @@ def write_docx(rows: list, path: str | Path, header: bool = True, decimals=None,
         body.append(para(title, bold=True))
     rule = '<w:{side} w:val="single" w:sz="{sz}" w:space="0" w:color="000000"/>'
     tbl = ['<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/><w:tblBorders>'
-           + rule.format(side="top", sz=8) + rule.format(side="bottom", sz=8)
+           + rule.format(side="top", sz=8)
+           + (rule.format(side="left", sz=8) if grid else "")
+           + rule.format(side="bottom", sz=8)
+           + (rule.format(side="right", sz=8) + rule.format(side="insideH", sz=4)
+              + rule.format(side="insideV", sz=4) if grid else "")
            + '</w:tblBorders><w:tblLayout w:type="autofit"/>'
            '<w:tblCellMar><w:left w:w="80" w:type="dxa"/><w:right w:w="80" w:type="dxa"/></w:tblCellMar></w:tblPr>']
     # column widths (twentieths of a point) from the longest text in each, which Word's autofit then refines
@@ -123,7 +136,7 @@ def write_docx(rows: list, path: str | Path, header: bool = True, decimals=None,
         head = header and i == 0
         tr = ["<w:tr>" + ("<w:trPr><w:tblHeader/></w:trPr>" if head else "")]
         for j, c in enumerate(r):
-            borders = ("<w:tcBorders>" + rule.format(side="bottom", sz=4) + "</w:tcBorders>") if head else ""
+            borders = ("<w:tcBorders>" + rule.format(side="bottom", sz=4) + "</w:tcBorders>") if head and not grid else ""
             tr.append(f'<w:tc><w:tcPr><w:tcW w:w="{widths[j]}" w:type="dxa"/>{borders}</w:tcPr>'
                       f"{para(c, bold=head, jc=jcs[al[j]])}</w:tc>")
         tbl.append("".join(tr) + "</w:tr>")
@@ -141,3 +154,108 @@ def write_docx(rows: list, path: str | Path, header: bool = True, decimals=None,
         z.writestr("docProps/core.xml", _CORE.format(title=escape(title or path.stem)))
         z.writestr("word/document.xml", doc)
     return str(path.resolve())
+
+
+# --- Excel ---
+
+_XCT = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+<Default Extension="xml" ContentType="application/xml"/>
+<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
+</Types>"""
+_XRELS = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
+</Relationships>"""
+_XWB = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<sheets><sheet name="{name}" sheetId="1" r:id="rId1"/></sheets></workbook>"""
+_XWBRELS = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+</Relationships>"""
+_XSTYLES = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<fonts count="2"><font><sz val="11"/><name val="{font}"/></font><font><b/><sz val="11"/><name val="{font}"/></font></fonts>
+<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
+<borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border>
+<border><left/><right/><top style="thin"/><bottom style="thin"/><diagonal/></border></borders>
+<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+<cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+<xf numFmtId="0" fontId="1" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1"/></cellXfs>
+<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+</styleSheet>"""
+
+
+def _col(j: int) -> str:
+    s = ""
+    j += 1
+    while j:
+        j, r = divmod(j - 1, 26)
+        s = chr(65 + r) + s
+    return s
+
+
+def write_xlsx(rows: list, path: str | Path, header: bool = True, decimals=None, font: str = "Arial",
+               title: str | None = None) -> str:
+    """Write the table to an Excel workbook: numbers as numbers (rounded as on the figure), the header bold with
+    rules above and below it."""
+    shown, _ = cells(rows, header, decimals)
+    out = []
+    for i, r in enumerate(shown):
+        head = header and i == 0
+        cs = []
+        for j, c in enumerate(r):
+            ref = f"{_col(j)}{i + 1}"
+            st = ' s="1"' if head else ""
+            v = None if head else _number(c)
+            if v is not None and c.strip():
+                cs.append(f'<c r="{ref}"{st}><v>{repr(v) if v != int(v) else int(v)}</v></c>')
+            elif c != "":
+                cs.append(f'<c r="{ref}"{st} t="inlineStr"><is><t xml:space="preserve">{escape(c)}</t></is></c>')
+        out.append(f'<row r="{i + 1}">{"".join(cs)}</row>')
+    n = max((len(r) for r in shown), default=1)
+    widths = [min(60, max(8, max((len(r[j]) for r in shown), default=0) + 2)) for j in range(n)]
+    cols = "<cols>" + "".join(f'<col min="{j + 1}" max="{j + 1}" width="{w}" customWidth="1"/>'
+                              for j, w in enumerate(widths)) + "</cols>"
+    sheet = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+             '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+             f'{cols}<sheetData>{"".join(out)}</sheetData></worksheet>')
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    name = escape((title or path.stem)[:31].translate({ord(ch): " " for ch in "[]:*?/\\"}) or "Table")
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", _XCT)
+        z.writestr("_rels/.rels", _XRELS)
+        z.writestr("docProps/core.xml", _CORE.format(title=escape(title or path.stem)))
+        z.writestr("xl/workbook.xml", _XWB.format(name=name))
+        z.writestr("xl/_rels/workbook.xml.rels", _XWBRELS)
+        z.writestr("xl/styles.xml", _XSTYLES.format(font=escape(font)))
+        z.writestr("xl/worksheets/sheet1.xml", sheet)
+    return str(path.resolve())
+
+
+def write_table(rows: list, path: str | Path, fmt: str | None = None, header: bool = True, decimals=None,
+                align=None, font: str = "Arial", size: float = 7, title: str | None = None,
+                grid: bool = False) -> str:
+    """The table as a file people edit: .docx (a Word table), .xlsx (an Excel sheet), .csv or .tsv (the cells as
+    shown, rounded as on the figure)."""
+    fmt = (fmt or Path(path).suffix.lstrip(".")).lower()
+    if fmt == "docx":
+        return write_docx(rows, path, header=header, decimals=decimals, align=align, font=font, size=size, title=title,
+                          grid=grid)
+    if fmt == "xlsx":
+        return write_xlsx(rows, path, header=header, decimals=decimals, font=font, title=title)
+    if fmt in ("csv", "tsv"):
+        shown, _ = cells(rows, header, decimals)
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(write_delimited(shown, "\t" if fmt == "tsv" else ","), encoding="utf-8")
+        return str(path.resolve())
+    raise ValueError(f"a table can't be written as {fmt}: use docx, xlsx, csv or tsv")

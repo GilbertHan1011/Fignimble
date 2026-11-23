@@ -57,7 +57,7 @@ def main(argv=None):
     p.add_argument("output")
     p.add_argument("--dpi", type=int, default=600)
     p.add_argument("--dark", action="store_true", help="the figure's dark version")
-    p.add_argument("--cmyk", action="store_true", help="CMYK colours for print (PDF, EPS, TIFF, JPEG)")
+    p.add_argument("--cmyk", action="store_true", help="CMYK colors for print (PDF, EPS, TIFF, JPEG)")
     p.add_argument("--outline", action="store_true", help="text as shapes (PDF, EPS, SVG)")
     p.add_argument("--journal", help="resolution rules of nature, science, cell, pnas, elife (default: the style's)")
     p = sub.add_parser("table", help="write a table as a Word file (.docx)")
@@ -138,7 +138,8 @@ def main(argv=None):
             st = res["style"]["props"]
             path = tables.write_docx(rows, out, header=p.get("header", True), decimals=p.get("decimals"),
                                      align=p.get("align"), font=p.get("font") or st.get("font") or "Arial",
-                                     size=p.get("size") or st.get("size") or 7, title=a.title)
+                                     size=p.get("size") or st.get("size") or 7, title=a.title,
+                                     grid=bool(p.get("grid")))
         else:
             path = tables.write_docx(tables.read_rows(src), out, header=not a.no_header, decimals=a.decimals,
                                      title=a.title)

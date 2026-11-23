@@ -12,6 +12,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
     let inspector = Inspector()
     let navigator = Navigator()
     let code = CodePane()
+    let captionPane = CaptionPane()
     let problems = ProblemsView()
     let history = HistoryView()
     let terminal = TerminalPanel()
@@ -25,6 +26,8 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
     private let status = NSTextField(labelWithString: "")
     private let zoomLabel = NSTextField(labelWithString: "")
     private let toolControl = NSSegmentedControl()
+    private var gridButton: NSButton?
+    private var guidesButton: NSButton?
     private var root = GrabSplitView()
     private var middle = GrabSplitView()
 
@@ -62,9 +65,9 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
     // MARK: layout
 
     private func build() {
-        canvas.main = self; inspector.main = self; navigator.main = self; code.main = self; problems.main = self; history.main = self
+        canvas.main = self; inspector.main = self; navigator.main = self; code.main = self; captionPane.main = self; problems.main = self; history.main = self
         hRuler.canvas = canvas; vRuler.canvas = canvas
-        drawer = BottomDrawer(code: code, problems: problems, history: history, terminal: terminal)
+        drawer = BottomDrawer(caption: captionPane, code: code, problems: problems, history: history, terminal: terminal)
         drawer.onShowTerminal = { [weak self] in self?.showTerminal(nil) }
         drawer.onNewTerminal = { [weak self] in self?.newTerminal(nil) }
         drawer.onHide = { [weak self] in self?.setDrawer(visible: false) }
@@ -149,7 +152,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         let icons = NSButton(title: "BioCartoon", image: logo, target: self, action: #selector(showBioCartoon(_:)))
         icons.bezelStyle = .texturedRounded; icons.toolTip = "Search BioCartoon's science icons and drag them onto the figure (⇧⌘B)"
         let aligns: [(String, String, Selector)] = [("align.horizontal.left", "Align left edges", #selector(alignLeft(_:))),
-                                                    ("align.horizontal.center", "Align centres", #selector(alignCenter(_:))),
+                                                    ("align.horizontal.center", "Align centers", #selector(alignCenter(_:))),
                                                     ("align.horizontal.right", "Align right edges", #selector(alignRight(_:))),
                                                     ("align.vertical.top", "Align tops", #selector(alignTop(_:))),
                                                     ("align.vertical.center", "Align middles", #selector(alignMiddle(_:))),
@@ -166,16 +169,22 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
                     b("plus.magnifyingglass", "Zoom in (⌘+)", #selector(zoomIn(_:))),
                     b("arrow.up.left.and.down.right.magnifyingglass", "Fit the figure (⌘0)", #selector(zoomFit(_:)))]
         let zoomSep = sep()
+        let gridButton = b("grid", "Grid lines (⌘')", #selector(toggleGrid(_:)))
+        let guidesButton = b("ruler", "Guides: show or hide them (drag one out of a ruler to add it)", #selector(toggleGuides(_:)))
+        for x in [gridButton, guidesButton] { x.setButtonType(.pushOnPushOff) }
+        gridButton.state = canvas.showGrid ? .on : .off; guidesButton.state = canvas.showGuides ? .on : .off
+        self.gridButton = gridButton; self.guidesButton = guidesButton
+        let aids = [gridButton, guidesButton]
         let extras = [b("moon", "Dark version of the figure, for talks (⌥⌘D)", #selector(toggleDarkPreview(_:))),
                       b("chevron.left.forwardslash.chevron.right", "The code of the figure and of what is selected (⌥⌘E)", #selector(showCodePane(_:))),
                       b("terminal", "Terminal for a coding agent (⌥⌘T)", #selector(showTerminal(_:))),
                       b("square.and.arrow.up", "Export the figure (⌘E)", #selector(exportFigure(_:)))]
-        let row = NSStackView(views: [toolControl, sep(), panel, image, icons, alignSep, alignStack, spacer] + zoom + [zoomSep] + extras)
+        let row = NSStackView(views: [toolControl, sep(), panel, image, icons, alignSep, alignStack, spacer] + zoom + aids + [zoomSep] + extras)
         row.spacing = 8; row.alignment = .centerY
         // on a narrow screen (a 13" MacBook Air) what the menus also offer steps aside, so the window fits:
         // the align buttons first, then zoom, then dark/code/terminal/export
         for v in [alignSep, alignStack] { row.setVisibilityPriority(.init(rawValue: 300), for: v) }
-        for v in zoom + [zoomSep] { row.setVisibilityPriority(.init(rawValue: 500), for: v) }
+        for v in zoom + [zoomSep] + aids { row.setVisibilityPriority(.init(rawValue: 500), for: v) }
         for v in extras { row.setVisibilityPriority(.init(rawValue: 700), for: v) }
         row.setClippingResistancePriority(.defaultLow, for: .horizontal)     // so it may be narrower than all of them
         row.translatesAutoresizingMaskIntoConstraints = false
@@ -188,16 +197,36 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
     }
 
     func showWindow() {
-        // inside the screen, whatever size was saved or asked for (1440 x 900 is more than a 13" MacBook Air shows)
-        if let vis = (window.screen ?? NSScreen.main)?.visibleFrame {
-            var f = window.frame
-            f.size.width = min(f.width, vis.width); f.size.height = min(f.height, vis.height)
-            f.origin.x = min(max(f.minX, vis.minX), vis.maxX - f.width)
-            f.origin.y = min(max(f.minY, vis.minY), vis.maxY - f.height)
-            window.setFrame(f, display: false)
+        // the first launch: most of the screen, not a fixed 1440 x 900 (more than a 13" MacBook Air shows)
+        let firstLaunch = UserDefaults.standard.string(forKey: "NSWindow Frame FignimbleMain") == nil
+        if firstLaunch, let vis = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame {
+            let w = min(1440, vis.width * 0.94), h = min(900, vis.height * 0.94)
+            window.setFrame(NSRect(x: vis.midX - w / 2, y: vis.midY - h / 2, width: w, height: h), display: false)
         }
+        fitWindowToScreen()
         window.makeKeyAndOrderFront(nil)
-        if window.frame.origin == .zero { window.center() }
+        NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.fitWindowToScreen() }
+        }
+    }
+
+    /// The screen that shows most of the window (a frame saved on a display since unplugged: the main one).
+    private var bestScreen: NSScreen? {
+        let f = window.frame
+        let area = { (s: NSScreen) -> CGFloat in let r = s.frame.intersection(f); return r.isNull ? 0 : r.width * r.height }
+        return NSScreen.screens.max { area($0) < area($1) }.flatMap { area($0) > 0 ? $0 : nil } ?? NSScreen.main ?? NSScreen.screens.first
+    }
+
+    /// Keep the whole window, title bar included, inside the visible part of its screen (below the menu bar, above
+    /// the Dock), whatever size was saved, and let it be made as small as that screen needs.
+    func fitWindowToScreen() {
+        guard let vis = bestScreen?.visibleFrame else { return }
+        window.minSize = NSSize(width: min(900, vis.width), height: min(560, vis.height))
+        var f = window.frame
+        f.size.width = min(f.width, vis.width); f.size.height = min(f.height, vis.height)
+        f.origin.x = min(max(f.minX, vis.minX), vis.maxX - f.width)
+        f.origin.y = min(max(f.minY, vis.minY), vis.maxY - f.height)
+        if f != window.frame { window.setFrame(f, display: true) }
     }
 
     // MARK: engine
@@ -309,6 +338,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
             if terminal.hasStarted { terminal.start(in: dir.path, original: nil) }
             let name = fig ?? (figures.first?["name"] as? String)
             if let n = name { await load(n) } else { canvas.setFigure(nil); inspector.update(); status.stringValue = "No figures yet: File ▸ New Figure (⌘N)." }
+            fitWindowToScreen()
             explainProjectOnce()
             checkPackages(asked: false)
         }
@@ -402,6 +432,8 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         await refreshState()
     }
 
+    func loadFigure(_ name: String) async { await load(name) }
+
     /// Show a figure from the list.
     func show(figure name: String) {
         guard name != current else { return }
@@ -422,6 +454,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         canvas.setFigure(f)
         navigator.setLayers(f, selection: canvas.selection)
         problems.set(f.warnings)
+        captionPane.set(f.caption, figure: f.name)
         drawer.rebuildStrip()
         inspector.update()
         hRuler.needsDisplay = true; vRuler.needsDisplay = true
@@ -507,7 +540,8 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
     func hint(for e: Element?) {
         guard let e = e, let f = figure else { return }
         var s = e.title(label: f.labelText(e.oid))
-        if e.isLabel { s += "  ·  drag moves every label, ⌥-drag this one" }
+        if e.isLabel { s += e.detached ? "  ·  unlinked from its panel: drag moves only it, double-click links it again"
+                                       : "  ·  drag moves every label, ⌥-drag this one, double-click unlinks it from its panel" }
         else if e.kind == "panel" { s += "  ·  double-click for its code" }
         else if e.kind == "text" { s += "  ·  double-click to retype" }
         if let l = e.line { s += "  ·  line \(l)" }
@@ -711,7 +745,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         }
     }
 
-    /// Copy Style (the eyedropper): the colours, line and text settings of the selected element.
+    /// Copy Style (the eyedropper): the colors, line and text settings of the selected element.
     @objc func copyStyle(_ sender: Any?) {
         guard let oid = sel.first, let e = figure?.element(oid) else { return }
         let keys = ["color", "stroke", "fill", "width", "dash", "opacity", "size", "weight", "style", "font", "tip", "head", "radius", "arrow"]
@@ -773,6 +807,21 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         }
     }
 
+    /// Unlink a panel's label from it (each then moves on its own), or link it again: `oid` is the label or panel.
+    func toggleLabelLink(_ oid: String) {
+        guard let f = figure, let e = f.element(oid) else { return }
+        guard let label = e.isLabel ? e : f.label(of: e.oid) else { return }
+        edit(["op": "label_detach", "oid": label.oid, "detach": !label.detached])
+        toast(label.detached ? "Label \(label.text ?? "") moves with its panel again"
+                             : "Label \(label.text ?? "") unlinked: the panel and its label now move separately (double-click the label to link it again)")
+    }
+    @objc func toggleSelectedLabelLink(_ sender: Any?) { if let oid = sel.first { toggleLabelLink(oid) } }
+    /// The label the selection's first item is or has.
+    private var selectedLabel: Element? {
+        guard let f = figure, let oid = sel.first, let e = f.element(oid) else { return nil }
+        return e.isLabel ? e : f.label(of: e.oid)
+    }
+
     @objc func addZoom(_ sender: Any?) {
         guard !selElements.isEmpty else { toast("Select a picture (or a panel, then the one that magnifies it)", error: true); return }
         edit(["op": "add_zoom", "oids": Array(selElements.prefix(2))])
@@ -789,7 +838,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
             await refreshState()
         }
     }
-    /// Recolour one mark of a panel with the colour picker; the colour is written once it settles.
+    /// Recolor one mark of a panel with the color picker; the color is written once it settles.
     private var markColor: (oid: String, mark: PanelMark)?
     private var markColorWork: DispatchWorkItem?
     func recolorMark(_ oid: String, _ mark: PanelMark) {
@@ -799,7 +848,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         p.color = NSColor(hex: mark.color) ?? .black
         p.setTarget(self); p.setAction(#selector(markColorChanged(_:)))
         p.makeKeyAndOrderFront(nil)
-        toast("Pick a colour for \(mark.key.replacingOccurrences(of: "ax0.", with: "")) (\(mark.color))")
+        toast("Pick a color for \(mark.key.replacingOccurrences(of: "ax0.", with: "")) (\(mark.color))")
     }
     @objc private func markColorChanged(_ sender: NSColorPanel) {
         guard let (oid, mark) = markColor else { return }
@@ -814,7 +863,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
     }
 
     @objc func setVision(_ sender: NSMenuItem) {
-        canvas.vision = ["normal", "deuteranopia", "protanopia", "tritanopia", "greyscale"][sender.tag]
+        canvas.vision = ["normal", "deuteranopia", "protanopia", "tritanopia", "grayscale"][sender.tag]
         if canvas.vision != "normal" { toast("The figure as seen with \(canvas.vision) (only on screen)") }
     }
 
@@ -983,21 +1032,43 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         }
     }
 
+    /// Units a new figure's size can be typed in: name, millimeters in one.
+    static let sizeUnits: [(String, Double)] = [("mm", 1), ("cm", 10), ("in", 25.4), ("ft", 304.8)]
+
     @objc func newFigure(_ sender: Any?) {
         guard project != nil else { newProject(sender); return }
         let a = NSAlert(); a.messageText = "New figure"
-        a.informativeText = "A figure file in the project. Sizes in mm."
+        a.informativeText = "A figure file in the project. Its size in millimeters, centimeters, inches or feet (the code keeps millimeters)."
         let name = NSTextField(string: "fig\(figures.count + 1)")
-        let w = NSTextField(string: mm(Double(figure?.size.width ?? 183))), h = NSTextField(string: "120")
+        let units = MainController.sizeUnits
+        var unit = units.firstIndex { $0.0 == UserDefaults.standard.string(forKey: "newFigureUnit") } ?? 0
+        let show = { (v: Double) -> String in mm(v / units[unit].1) }
+        let w = NSTextField(string: show(Double(figure?.size.width ?? 183))), h = NSTextField(string: show(120))
         for f in [name, w, h] { f.widthAnchor.constraint(equalToConstant: f === name ? 140 : 60).isActive = true }
-        let grid = NSGridView(views: [[NSTextField(labelWithString: "Name"), name], [NSTextField(labelWithString: "Width"), w], [NSTextField(labelWithString: "Height"), h]])
-        grid.frame = NSRect(x: 0, y: 0, width: 240, height: 90)
+        let unitMenu = NSPopUpButton(frame: .zero, pullsDown: false)
+        unitMenu.addItems(withTitles: ["millimeters (mm)", "centimeters (cm)", "inches (in)", "feet (ft)"])
+        unitMenu.selectItem(at: unit)
+        let change = Action { _ in
+            // the size typed stays the same size, in the new unit
+            let old = units[unit].1
+            unit = unitMenu.indexOfSelectedItem
+            for f in [w, h] { if let v = Double(f.stringValue.replacingOccurrences(of: ",", with: ".")) { f.stringValue = mm(v * old / units[unit].1) } }
+        }
+        unitMenu.target = change; unitMenu.action = #selector(Action.fire(_:))
+        let grid = NSGridView(views: [[NSTextField(labelWithString: "Name"), name], [NSTextField(labelWithString: "Width"), w],
+                                      [NSTextField(labelWithString: "Height"), h], [NSTextField(labelWithString: "Units"), unitMenu]])
+        grid.frame = NSRect(x: 0, y: 0, width: 260, height: 124)
         a.accessoryView = grid; a.addButton(withTitle: "Create"); a.addButton(withTitle: "Cancel")
         a.beginSheetModal(for: window) { [weak self] r in
+            _ = change
             guard let self, r == .alertFirstButtonReturn else { return }
+            UserDefaults.standard.set(units[unit].0, forKey: "newFigureUnit")
+            let k = units[unit].1
+            let num = { (f: NSTextField, d: Double) -> Double in (Double(f.stringValue.replacingOccurrences(of: ",", with: ".")) ?? d / k) * k }
+            let width = (num(w, 183) * 100).rounded() / 100, height = (num(h, 120) * 100).rounded() / 100
             self.enqueue { [weak self] in guard let self else { return }
                 do {
-                    let res = try await self.engine.json("new_figure", ["name": name.stringValue, "width": Double(w.stringValue) ?? 183, "height": Double(h.stringValue) ?? 120])
+                    let res = try await self.engine.json("new_figure", ["name": name.stringValue, "width": width, "height": height])
                     if let n = res["name"] as? String { await self.refreshState(); await self.load(n) }
                     else if let e = res["error"] as? String { self.toast(e, error: true) }
                 } catch { self.toast(error.localizedDescription, error: true) }
@@ -1092,8 +1163,13 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         guard let name = current, let f = figure else { return }
         let p = NSSavePanel()
         let format = NSPopUpButton(frame: .zero, pullsDown: false)
-        let formats = ["pdf", "eps", "tiff", "svg", "png", "jpg"]
-        format.addItems(withTitles: ["PDF (vector)", "EPS (vector)", "TIFF", "SVG (vector)", "PNG", "JPEG"])
+        var formats = ["pdf", "eps", "tiff", "svg", "png", "jpg", "pptx"]
+        var titles = ["PDF (vector)", "EPS (vector)", "TIFF", "SVG (vector)", "PNG", "JPEG", "PowerPoint (.pptx)"]
+        if f.isTableFigure {                // a table on its own: also as cells people can edit
+            formats += ["docx", "xlsx", "csv", "tsv"]
+            titles += ["Word table (.docx)", "Excel (.xlsx)", "CSV", "TSV"]
+        }
+        format.addItems(withTitles: titles)
         // any resolution, typed or picked; the journal's minimum is applied by the engine
         let dpis = [300, 500, 600, 1000, 1200, 2400]
         let dpi = NSComboBox()
@@ -1103,15 +1179,16 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         // the journal whose resolutions the export meets: the style's, or another
         let styleJournal = f.style["journal"] as? String
         let journal = NSPopUpButton(frame: .zero, pullsDown: false)
-        journal.menu?.addItem(withTitle: "Usual standard (300/600/1200 dpi)", action: nil, keyEquivalent: "")
+        journal.menu?.addItem(withTitle: "General (300/600/1200 dpi)", action: nil, keyEquivalent: "")
         journal.menu?.addItem(.separator())
         if let menu = journal.menu {
             fillJournalMenu(menu) { k in
                 let it = NSMenuItem(title: journalName(k), action: nil, keyEquivalent: ""); it.representedObject = k; return [it]
             }
         }
-        if let k = styleJournal, let i = journal.itemArray.firstIndex(where: { $0.representedObject as? String == k }) { journal.selectItem(at: i) }
-        else { journal.selectItem(at: 0) }
+        // General unless asked: a journal's rules are picked here when the figure goes to that journal
+        _ = styleJournal
+        journal.selectItem(at: 0)
         let key = { journal.selectedItem?.representedObject as? String }
         let note = NSTextField(wrappingLabelWithString: "")
         note.font = Theme.font(10.5); note.textColor = .secondaryLabelColor; note.preferredMaxLayoutWidth = 520
@@ -1120,30 +1197,42 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
             let src = (e.kind == "inset" ? e.item["source"] : e.props["source"]) as? String ?? ""
             return (e.kind == "image" || (e.kind == "inset" && e.inner == "image")) && !src.lowercased().hasSuffix(".svg") && !src.lowercased().hasSuffix(".pdf")
         }
-        let refresh = { (pickDPI: Bool) in
-            let fmt = formats[format.indexOfSelectedItem]
-            let d = self.journalDPI(key())
-            let raster = ["tiff", "png", "jpg"].contains(fmt)
-            if pickDPI { dpi.stringValue = "\(raster ? (pictures ? d.combination : d.line) : 600)" }
-            let who = key().map { self.journalName($0) } ?? "The usual standard"
-            let need = "\(who): \(d.line) dpi for line art, \(d.combination) for figures with pictures, \(d.photo) for the pictures in a vector file." + (key().map { " " + self.journalChecked($0) } ?? "")
-            note.stringValue = need + (raster
-                ? " This figure \(pictures ? "has pictures" : "is line art"): a lower setting is raised to \(pictures ? d.combination : d.line) dpi (except PNG)."
-                : " Vector stays sharp at any size; the resolution is that of what panels draw as pixels (heatmaps, dense scatters)\(fmt == "eps" ? " and of what EPS has to rasterize" : ""), at least \(d.photo) dpi; pictures placed from files keep their own pixels, and those below \(d.photo) dpi are reported.")
-                + " The file is measured once written."
-            p.allowedContentTypes = [UTType(filenameExtension: fmt) ?? .data]
-            p.nameFieldStringValue = name + "." + fmt
-        }
-        let fmtAction = Action { _ in refresh(true) }
-        format.target = fmtAction; format.action = #selector(Action.fire(_:))
-        journal.target = fmtAction; journal.action = #selector(Action.fire(_:))
         let cmykBox = NSButton(checkboxWithTitle: "CMYK", target: nil, action: nil)
-        cmykBox.toolTip = "Colours converted for print (PDF, EPS, TIFF, JPEG; PDF and EPS through Ghostscript)"
+        cmykBox.toolTip = "Colors converted for print (PDF, EPS, TIFF, JPEG; PDF and EPS through Ghostscript)"
         let outlineBox = NSButton(checkboxWithTitle: "Text as outlines", target: nil, action: nil)
         outlineBox.toolTip = "Text turned into shapes, for journals that ask for it (PDF, EPS, SVG)"
         let darkBox = NSButton(checkboxWithTitle: "Dark version", target: nil, action: nil)
         darkBox.state = darkPreview ? .on : .off
         darkBox.toolTip = "White text and lines on black, for slides"
+        let refresh = { (pickDPI: Bool) in
+            let fmt = formats[format.indexOfSelectedItem]
+            let d = self.journalDPI(key())
+            let raster = ["tiff", "png", "jpg"].contains(fmt)
+            let tableFile = ["docx", "xlsx", "csv", "tsv"].contains(fmt)
+            for v in [dpi, journal, cmykBox, outlineBox, darkBox] as [NSControl] { v.isEnabled = !tableFile }
+            if pickDPI { dpi.stringValue = "\(raster ? (pictures ? d.combination : d.line) : (fmt == "pptx" ? 300 : 600))" }
+            p.allowedContentTypes = [UTType(filenameExtension: fmt) ?? .data]
+            p.nameFieldStringValue = name + "." + fmt
+            if tableFile {
+                note.stringValue = fmt == "docx" ? "The table as a real Word table, in the figure's font: what journals want for tables."
+                    : fmt == "xlsx" ? "The table as an Excel sheet: numbers stay numbers, rounded as on the figure."
+                    : "The table's cells as \(fmt.uppercased()) text, rounded as on the figure."
+                return
+            }
+            if fmt == "pptx" {
+                note.stringValue = "A 16:9 slide with the figure on it: at its real size when it fits, else scaled to fit. The picture is a PNG at this resolution, with a vector copy PowerPoint 2019 and later show instead; the caption becomes its alt text."
+                return
+            }
+            let who = key().map { self.journalName($0) } ?? "General"
+            let need = "\(who): \(d.line) dpi for line art, \(d.combination) for figures with pictures, \(d.photo) for the pictures in a vector file." + (key().map { " " + self.journalChecked($0) } ?? "")
+            note.stringValue = need + (raster
+                ? " This figure \(pictures ? "has pictures" : "is line art"): a lower setting is raised to \(pictures ? d.combination : d.line) dpi (except PNG)."
+                : " Vector stays sharp at any size; the resolution is that of what panels draw as pixels (heatmaps, dense scatters)\(fmt == "eps" ? " and of what EPS has to rasterize" : ""), at least \(d.photo) dpi; pictures placed from files keep their own pixels, and those below \(d.photo) dpi are reported.")
+                + " The file is measured once written."
+        }
+        let fmtAction = Action { _ in refresh(true) }
+        format.target = fmtAction; format.action = #selector(Action.fire(_:))
+        journal.target = fmtAction; journal.action = #selector(Action.fire(_:))
         // two rows, so the options fit the save panel's width whatever the journal's name
         journal.widthAnchor.constraint(lessThanOrEqualToConstant: 260).isActive = true
         let top = NSStackView(views: [NSTextField(labelWithString: "Format:"), format, NSTextField(labelWithString: "For:"), journal])
@@ -1168,6 +1257,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
                     let w = r["warnings"] as? [String] ?? []
                     let rz = r["resolution"] as? [String: Any] ?? [:]
                     var said = "Exported \(u.lastPathComponent)"
+                    if ["docx", "xlsx", "csv", "tsv"].contains(fmt) { toast(said); return }
                     if let got = rz["dpi"] as? NSNumber { said += " at \(got.intValue) dpi" }
                     else if let pic = rz["pictures"] as? NSNumber { said += ": vector, pictures at \(pic.intValue) dpi or more" }
                     else if fmt != "svg" { said += ": vector" }
@@ -1207,8 +1297,31 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
     @objc func zoomFit(_ sender: Any?) { canvas.fit() }
     @objc func zoomActual(_ sender: Any?) { canvas.actualSize() }
     @objc func toggleGrid(_ sender: Any?) { canvas.showGrid.toggle() }
+    /// The tool bar's grid and guides buttons, pressed or not as the canvas shows them.
+    func syncAidButtons() { gridButton?.state = canvas.showGrid ? .on : .off; guidesButton?.state = canvas.showGuides ? .on : .off }
     @objc func toggleSnapGrid(_ sender: Any?) { canvas.snapToGrid.toggle() }
     @objc func toggleSmartGuides(_ sender: Any?) { canvas.smartGuides.toggle() }
+    @objc func toggleGuides(_ sender: Any?) {
+        canvas.showGuides.toggle()
+        if canvas.showGuides && (figure?.guides.isEmpty ?? true) { toast("No guides yet: View ▸ Add Vertical Guide, or drag one out of a ruler") }
+    }
+    @objc func setGridStep(_ sender: NSMenuItem) {
+        canvas.gridStep = Double(sender.tag) / 10
+        canvas.showGrid = true
+    }
+    @objc func addVerticalGuide(_ sender: Any?) {
+        guard let f = figure else { return }
+        canvas.showGuides = true
+        edit(["op": "guide_add", "x": (Double(f.size.width) / 2 * 10).rounded() / 10])
+        toast("Guide added at the middle: drag it to place it, or back into the ruler to remove it")
+    }
+    @objc func addHorizontalGuide(_ sender: Any?) {
+        guard let f = figure else { return }
+        canvas.showGuides = true
+        edit(["op": "guide_add", "y": (Double(f.size.height) / 2 * 10).rounded() / 10])
+        toast("Guide added at the middle: drag it to place it, or back into the ruler to remove it")
+    }
+    @objc func clearGuides(_ sender: Any?) { edit(["op": "guide_clear"]) }
     @objc func toggleSidebar(_ sender: Any?) { navigator.isHidden.toggle() }
     @objc func toggleInspector(_ sender: Any?) { rightHost.isHidden.toggle() }
     @objc func refreshFigure(_ sender: Any?) { refresh(force: true) }
@@ -1218,6 +1331,10 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         showCodeOfSelection()
     }
     @objc func showProblems(_ sender: Any?) { setDrawer(visible: true); drawer.show(.problems) }
+    @objc func showCaption(_ sender: Any?) {
+        setDrawer(visible: true); drawer.show(.caption)
+        window.makeFirstResponder(captionPane.text)
+    }
 
     @objc func showTerminal(_ sender: Any?) {
         if drawer.page == .terminal && !middle.isSubviewCollapsed(drawer) && sender != nil { setDrawer(visible: false); return }
@@ -1259,9 +1376,12 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
                 item("Release Layout", #selector(releaseSelectedLayout(_:)))
             }
             if figure.map({ f in selElements.contains { f.element($0)?.group != nil } }) == true { item("Ungroup", #selector(ungroup(_:))) }
+            if sel.count <= 2, let l = selectedLabel {
+                item(l.detached ? "Link Label to Panel" : "Unlink Label from Panel", #selector(toggleSelectedLabelLink(_:)))
+            }
             item("Duplicate", #selector(duplicate(_:)))
             item("Delete", #selector(deleteSelected(_:)))
-            if sel.count == 1, figure?.element(sel[0])?.kind == "table" { item("Export Table as Word…", #selector(exportTable(_:))) }
+            if sel.count == 1, figure?.element(sel[0])?.kind == "table" { item("Export Table…", #selector(exportTable(_:))) }
             if sel.count == 1, let e = figure?.element(sel[0]), remoteOrigin(of: e) != nil { item("Update from Server", #selector(updateFromServer(_:))) }
             let bc = bioCartoonMenuItems()
             if !bc.isEmpty { m.addItem(.separator()); bc.forEach { m.addItem($0) } }
@@ -1287,7 +1407,7 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
             return state["canRedo"] as? Bool ?? false
         case #selector(toggleDarkPreview(_:)): item.state = darkPreview ? .on : .off; return figure != nil
         case #selector(setVision(_:)):
-            item.state = canvas.vision == ["normal", "deuteranopia", "protanopia", "tritanopia", "greyscale"][item.tag] ? .on : .off
+            item.state = canvas.vision == ["normal", "deuteranopia", "protanopia", "tritanopia", "grayscale"][item.tag] ? .on : .off
             return figure != nil
         case #selector(setAppearance(_:)):
             item.state = (UserDefaults.standard.string(forKey: "appearance") ?? "system") == ["system", "light", "dark"][item.tag] ? .on : .off
@@ -1298,11 +1418,16 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         case #selector(toggleGrid(_:)): item.state = canvas.showGrid ? .on : .off
         case #selector(toggleSnapGrid(_:)): item.state = canvas.snapToGrid ? .on : .off
         case #selector(toggleSmartGuides(_:)): item.state = canvas.smartGuides ? .on : .off
+        case #selector(toggleGuides(_:)): item.state = canvas.showGuides ? .on : .off
+        case #selector(setGridStep(_:)): item.state = abs(canvas.gridStep - Double(item.tag) / 10) < 1e-6 ? .on : .off
+        case #selector(addVerticalGuide(_:)), #selector(addHorizontalGuide(_:)): return figure != nil
+        case #selector(clearGuides(_:)): return !(figure?.guides.isEmpty ?? true)
         case #selector(toggleSidebar(_:)): item.title = navigator.isHidden ? "Show Figures and Layers" : "Hide Figures and Layers"
         case #selector(toggleInspector(_:)): item.title = rightHost.isHidden ? "Show Inspector" : "Hide Inspector"
         case #selector(labelsNone(_:)): item.state = figure?.labelStyle["numbering"] as? String == "none" ? .on : .off; return figure != nil
-        case #selector(exportTable(_:)): return sel.count == 1 && figure?.element(sel[0])?.kind == "table"
+        case #selector(exportTable(_:)): return (sel.count == 1 && figure?.element(sel[0])?.kind == "table") || figure?.isTableFigure == true
         case #selector(insertTable(_:)), #selector(insertRemotePanel(_:)): return figure != nil
+        case #selector(newTable(_:)): return project != nil
         case #selector(toggleLabelAlign(_:)): item.state = (figure?.labelStyle["align"] as? Bool ?? true) ? .on : .off; return figure != nil
         case #selector(toggleLabelOrder(_:)): item.state = (figure?.labelStyle["order"] as? String) == "source" ? .on : .off; return figure != nil
         case #selector(labelFormat(_:)):
@@ -1329,6 +1454,9 @@ final class MainController: NSObject, NSWindowDelegate, NSMenuItemValidation {
         case #selector(flipHorizontal(_:)), #selector(flipVertical(_:)), #selector(cropPicture(_:)), #selector(addScaleBar(_:)):
             return sel.first.flatMap { figure?.element($0) }.map { $0.kind == "image" || ($0.kind == "inset" && $0.inner == "image") } ?? false
         case #selector(addZoom(_:)): return !selElements.isEmpty
+        case #selector(toggleSelectedLabelLink(_:)):
+            item.title = selectedLabel?.detached == true ? "Link Label to Panel" : "Unlink Label from Panel"
+            return selectedLabel != nil
         case #selector(selectAll(_:)): return figure != nil
         case #selector(newPanel(_:)), #selector(insertImage(_:)), #selector(insertPanelCode(_:)), #selector(exportFigure(_:)),
              #selector(labelsOutside(_:)), #selector(labelsInside(_:)), #selector(labelJournal(_:)), #selector(refreshFigure(_:)),

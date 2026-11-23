@@ -329,7 +329,7 @@ final class TerminalSession: NSView, LocalProcessTerminalViewDelegate {
         super.init(frame: frame)
         wantsLayer = true
         term.processDelegate = self
-        // the terminal keeps resolved RGB colours, so set them again on a light/dark switch
+        // the terminal keeps resolved RGB colors, so set them again on a light/dark switch
         Theme.layerColors(self) { s in
             s.layer?.backgroundColor = Theme.codeBackground.cgColor
             let fg = Theme.dynamic(light: NSColor(white: 0.12, alpha: 1), dark: NSColor(white: 0.9, alpha: 1))

@@ -19,14 +19,14 @@ enum Theme {
     /// The slide navigator on the left: a solid gray (no vibrancy, so the wallpaper can't tint it).
     static let sidebarBackground = dynamic(light: NSColor(white: 0.93, alpha: 1), dark: NSColor(white: 0.17, alpha: 1))
 
-    /// A colour that follows the window's light/dark appearance.
+    /// A color that follows the window's light/dark appearance.
     static func dynamic(light: NSColor, dark: NSColor) -> NSColor {
         NSColor(name: nil) { $0.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light }
     }
     /// Foreground ink on the dark/light chrome: white at `alpha` in dark mode, black in light mode.
     static func ink(_ alpha: CGFloat) -> NSColor { dynamic(light: NSColor(white: 0, alpha: alpha), dark: NSColor(white: 1, alpha: alpha)) }
 
-    /// Layer colours are CGColors fixed when they are set; `apply` sets them now and again whenever light/dark changes.
+    /// Layer colors are CGColors fixed when they are set; `apply` sets them now and again whenever light/dark changes.
     /// The view is handed back to `apply`, so the closure need not (and must not) capture it.
     static func layerColors<V: NSView>(_ view: V, _ apply: @escaping (V) -> Void) {
         AppearanceWatch.shared.add(view) { [weak view] in if let v = view { apply(v) } }

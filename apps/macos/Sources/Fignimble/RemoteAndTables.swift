@@ -26,19 +26,77 @@ extension MainController {
         }
     }
 
-    /// File ▸ Export Table as Word…: the selected table as a .docx with a real Word table.
-    @objc func exportTable(_ sender: Any?) {
-        guard let name = current, canvas.selection.count == 1, let e = figure?.element(canvas.selection[0]), e.kind == "table" else { return }
-        let p = NSSavePanel()
-        p.allowedContentTypes = [UTType(filenameExtension: "docx") ?? .data]
-        let stem = ((e.s("source") ?? "table") as NSString).lastPathComponent
-        p.nameFieldStringValue = (stem as NSString).deletingPathExtension + ".docx"
-        if let proj = project { p.directoryURL = URL(fileURLWithPath: proj) }
-        p.beginSheetModal(for: window) { [weak self] r in
-            guard let self, r == .OK, let u = p.url else { return }
+    /// Insert ▸ New Table…: a table in a figure of its own (its cells in tables/<name>.csv), sized to the table,
+    /// to type into with the inspector's cells and export as a picture, Word, Excel, CSV or TSV.
+    @objc func newTable(_ sender: Any?) {
+        guard project != nil else { newProject(sender); return }
+        let a = NSAlert(); a.messageText = "New table"
+        a.informativeText = "A table in a figure of its own. Type its cells in the inspector; export it as a picture or as Word, Excel, CSV or TSV."
+        let name = NSTextField(string: "table\(figures.filter { ($0["name"] as? String ?? "").hasPrefix("table") }.count + 1)")
+        let rows = NSTextField(string: "4"), cols = NSTextField(string: "3")
+        for f in [name, rows, cols] { f.widthAnchor.constraint(equalToConstant: f === name ? 140 : 50).isActive = true }
+        let grid = NSGridView(views: [[NSTextField(labelWithString: "Name"), name],
+                                      [NSTextField(labelWithString: "Rows (with the header)"), rows],
+                                      [NSTextField(labelWithString: "Columns"), cols]])
+        grid.frame = NSRect(x: 0, y: 0, width: 300, height: 90)
+        a.accessoryView = grid; a.addButton(withTitle: "Create"); a.addButton(withTitle: "Cancel")
+        a.beginSheetModal(for: window) { [weak self] r in
+            guard let self, r == .alertFirstButtonReturn else { return }
+            if code.dirty { code.save() }
+            let args: [String: Any] = ["name": name.stringValue, "rows": max(1, min(200, Int(rows.stringValue) ?? 4)),
+                                       "cols": max(1, min(50, Int(cols.stringValue) ?? 3))]
             self.enqueue { [weak self] in guard let self else { return }
                 do {
-                    let r = try await self.engine.json("export_table", ["figure": name, "oid": e.oid, "path": u.path])
+                    let res = try await self.engine.json("new_table", args)
+                    if let n = res["name"] as? String {
+                        await self.refreshState()
+                        self.canvas.selection = []
+                        await self.loadFigure(n)
+                        if let t = self.figure?.elements.first(where: { $0.kind == "table" }) { self.canvas.selection = [t.oid] }
+                    } else if let e = res["error"] as? String { self.toast(e, error: true) }
+                } catch { self.toast(error.localizedDescription, error: true) }
+            }
+        }
+    }
+
+    /// The inspector's cells were applied: the table's file (or rows=) gets them; a figure that is only this table
+    /// is then made the table's size.
+    func applyTableCells(_ oid: String, _ rows: [[String]]) {
+        var a: [String: Any] = ["op": "table_rows", "oid": oid, "rows": rows]
+        if figure?.isTableFigure == true { a["then"] = ["op": "fit_figure", "margin": 3] }      // one undo step
+        edit(a)
+        let gen = canvas.tableDraftGeneration
+        enqueue { [weak self] in self?.canvas.clearTableDraft(gen) }
+    }
+
+    /// File ▸ Export Table…: the selected table (or a table figure's) as Word, Excel, CSV or TSV.
+    @objc func exportTable(_ sender: Any?) {
+        guard let name = current, let f = figure else { return }
+        let picked = canvas.selection.count == 1 ? f.element(canvas.selection[0]) : nil
+        guard let e = picked?.kind == "table" ? picked : (f.isTableFigure ? f.elements.first : nil) else { return }
+        let p = NSSavePanel()
+        let formats = ["docx", "xlsx", "csv", "tsv"]
+        let format = NSPopUpButton(frame: .zero, pullsDown: false)
+        format.addItems(withTitles: ["Word table (.docx)", "Excel (.xlsx)", "CSV", "TSV"])
+        let stem = (((e.s("source") ?? name) as NSString).lastPathComponent as NSString).deletingPathExtension
+        let pick = Action { _ in
+            let fmt = formats[format.indexOfSelectedItem]
+            p.allowedContentTypes = [UTType(filenameExtension: fmt) ?? .data]
+            p.nameFieldStringValue = stem + "." + fmt
+        }
+        format.target = pick; format.action = #selector(Action.fire(_:))
+        let acc = NSStackView(views: [NSTextField(labelWithString: "Format:"), format])
+        acc.edgeInsets = NSEdgeInsets(top: 8, left: 8, bottom: 8, right: 8)
+        p.accessoryView = acc
+        pick.fire(format)
+        if let proj = project { p.directoryURL = URL(fileURLWithPath: proj) }
+        p.beginSheetModal(for: window) { [weak self] r in
+            _ = pick
+            guard let self, r == .OK, let u = p.url else { return }
+            let fmt = formats[format.indexOfSelectedItem]
+            self.enqueue { [weak self] in guard let self else { return }
+                do {
+                    let r = try await self.engine.json("export_table", ["figure": name, "oid": e.oid, "path": u.path, "format": fmt])
                     if r["ok"] as? Bool == true { toast("Exported \(u.lastPathComponent)") }
                     else { toast(r["error"] as? String ?? "Couldn't export the table", error: true) }
                 } catch { toast(error.localizedDescription, error: true) }

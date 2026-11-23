@@ -7,7 +7,7 @@ struct Sprite {
 }
 
 /// A text a panel's code draws (an axis label, a tick label, a legend entry), where it is on the figure.
-/// A coloured mark a panel's code draws (a line, a scatter, a bar), where it is on the figure.
+/// A colored mark a panel's code draws (a line, a scatter, a bar), where it is on the figure.
 struct PanelMark {
     let key: String
     let color: String
@@ -71,6 +71,8 @@ final class Element {
     let panelOid: String?     // a label's panel
     let text: String?         // a label's text
     let autoLabel: Bool
+    /// A label unhooked from its panel: it stays put when the panel moves, and moves on its own.
+    let detached: Bool
     let parentOid: String?    // the layout a panel is in
     let children: [String]
     let dividers: [Divider]
@@ -83,6 +85,9 @@ final class Element {
     let locked: Bool
     let points: [CGPoint]     // a path's
     let sourceBox: CGRect?    // a zoom's source picture
+    /// A table's columns (x, width) and rows (y, height), mm from its top-left corner: where each cell is.
+    let gridCols: [(Double, Double)]
+    let gridRows: [(Double, Double)]
 
     init(_ d: [String: Any]) {
         oid = d["oid"] as? String ?? "?"
@@ -104,6 +109,7 @@ final class Element {
         panelOid = d["panel"] as? String
         text = d["text"] as? String
         autoLabel = d["auto"] as? Bool ?? true
+        detached = d["detached"] as? Bool ?? false
         parentOid = d["parent"] as? String
         children = d["children"] as? [String] ?? []
         dividers = (d["dividers"] as? [[String: Any]] ?? []).map {
@@ -126,6 +132,9 @@ final class Element {
         locked = d["locked"] as? Bool ?? false
         points = ((d["props"] as? [String: Any])?["points"] as? [[Any]] ?? []).map { CGPoint(x: num($0.first), y: num($0.count > 1 ? $0[1] : 0)) }
         sourceBox = Element.rect(d["sourceBox"])
+        let g = d["grid"] as? [String: Any]
+        gridCols = (g?["cols"] as? [[Any]] ?? []).map { (num($0.first), num($0.count > 1 ? $0[1] : 0)) }
+        gridRows = (g?["rows"] as? [[Any]] ?? []).map { (num($0.first), num($0.count > 1 ? $0[1] : 0)) }
     }
 
     /// Whether the canvas lets the pointer take it (hidden and locked elements are reached in the layers list).
@@ -140,6 +149,25 @@ final class Element {
     }
 
     var isLabel: Bool { kind == "label" }
+    /// A table's cells as text, row by row.
+    var tableCells: [[String]] {
+        (props["cells"] as? [[Any]] ?? props["rows"] as? [[Any]] ?? []).map { $0.map { c -> String in
+            if let n = c as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID() { let v = n.doubleValue; return v == v.rounded() && abs(v) < 1e15 ? String(Int(v)) : "\(v)" }
+            return c is NSNull ? "" : "\(c)"
+        } }
+    }
+    /// The cell of a table under a figure point (mm): (row, column).
+    func tableCell(at p: CGPoint) -> (Int, Int)? {
+        let x = Double(p.x - box.minX), y = Double(p.y - box.minY)
+        guard let i = gridRows.firstIndex(where: { y >= $0.0 && y < $0.0 + $0.1 }) ?? (y >= 0 && y < Double(box.height) ? (y < (gridRows.first?.0 ?? 0) ? 0 : gridRows.count - 1) : nil),
+              let j = gridCols.firstIndex(where: { x >= $0.0 && x < $0.0 + $0.1 }), i >= 0, i < gridRows.count else { return nil }
+        return (i, j)
+    }
+    /// Where a table's cell is on the figure (mm).
+    func tableCellBox(_ i: Int, _ j: Int) -> CGRect? {
+        guard i < gridRows.count, j < gridCols.count else { return nil }
+        return CGRect(x: box.minX + gridCols[j].0, y: box.minY + gridRows[i].0, width: gridCols[j].1, height: gridRows[i].1)
+    }
     var isLine: Bool { kind == "line" }
     func p(_ k: String) -> Double? { (props[k] as? NSNumber)?.doubleValue }
     func s(_ k: String) -> String? { props[k] as? String }
@@ -222,7 +250,9 @@ final class FigureData {
     let pxPerMM: Double
     let background: String?
     let dark: Bool
-    /// The project's palette (Style(palette=...)), resolved: names (or numbers) and colours.
+    /// The figure's caption (fig.caption(...)): free text, not drawn on the figure.
+    let caption: String
+    /// The project's palette (Style(palette=...)), resolved: names (or numbers) and colors.
     let palette: [(String, String)]
     /// fignimble's named palettes.
     let palettes: [String: [String]]
@@ -248,6 +278,7 @@ final class FigureData {
         pxPerMM = (d["pxPerMM"] as? NSNumber)?.doubleValue ?? 12
         background = d["background"] as? String
         dark = d["dark"] as? Bool ?? false
+        caption = ((d["caption"] as? [String: Any])?["text"] as? String) ?? ""
         palette = ((d["style"] as? [String: Any])?["palette"] as? [[Any]] ?? []).compactMap { p in
             guard p.count == 2, let c = p[1] as? String else { return nil }
             return ("\(p[0])", c)
@@ -259,11 +290,13 @@ final class FigureData {
     func element(_ oid: String) -> Element? { all.first { $0.oid == oid } }
     func label(of panel: String) -> Element? { labels.first { $0.panelOid == panel } }
     func labelText(_ oid: String) -> String? { label(of: oid)?.text }
+    /// A figure that is just a table (Insert ▸ New Table…): it also exports as Word, Excel, CSV or TSV.
+    var isTableFigure: Bool { !elements.isEmpty && elements.allSatisfy { $0.kind == "table" } && elements.count == 1 }
 }
 
 func num(_ v: Any?) -> Double { (v as? NSNumber)?.doubleValue ?? Double(v as? String ?? "") ?? 0 }
 
-/// "12.5" for 12.5, "12" for 12.0: millimetres for fields.
+/// "12.5" for 12.5, "12" for 12.0: millimeters for fields.
 func mm(_ v: Double) -> String {
     let r = (v * 100).rounded() / 100
     return r == r.rounded() ? String(Int(r)) : String(format: "%g", r)

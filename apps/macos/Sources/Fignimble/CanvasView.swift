@@ -15,7 +15,7 @@ enum Tool: String, CaseIterable {
 }
 
 /// The figure on its paper: what the engine rendered, one sprite per element, which the user selects, drags,
-/// resizes and draws on. Positions are millimetres from the figure's top-left corner, y down, as in the code.
+/// resizes and draws on. Positions are millimeters from the figure's top-left corner, y down, as in the code.
 final class CanvasView: NSView, NSTextFieldDelegate {
     weak var main: MainController?
     private(set) var figure: FigureData?
@@ -30,12 +30,17 @@ final class CanvasView: NSView, NSTextFieldDelegate {
     var part: PanelPart? { didSet { if part != oldValue { needsDisplay = true; main?.selectionChanged() } } }
     private var hoverPart: PanelPart?
     var tool: Tool = .select { didSet { window?.invalidateCursorRects(for: self); main?.toolChanged() } }
-    var showGrid = UserDefaults.standard.bool(forKey: "showGrid") { didSet { UserDefaults.standard.set(showGrid, forKey: "showGrid"); needsDisplay = true } }
+    var showGrid = UserDefaults.standard.bool(forKey: "showGrid") { didSet { UserDefaults.standard.set(showGrid, forKey: "showGrid"); needsDisplay = true; main?.syncAidButtons() } }
     var snapToGrid = UserDefaults.standard.bool(forKey: "snapToGrid") { didSet { UserDefaults.standard.set(snapToGrid, forKey: "snapToGrid") } }
     var smartGuides = UserDefaults.standard.object(forKey: "smartGuides") as? Bool ?? true { didSet { UserDefaults.standard.set(smartGuides, forKey: "smartGuides") } }
-    /// How the canvas shows colours: normal, or as readers with a colour vision deficiency see them.
+    /// Guides shown (and snapped to); hidden, they stay in the code.
+    var showGuides = UserDefaults.standard.object(forKey: "showGuides") as? Bool ?? true { didSet { UserDefaults.standard.set(showGuides, forKey: "showGuides"); needsDisplay = true; main?.syncAidButtons() } }
+    /// How the canvas shows colors: normal, or as readers with a color vision deficiency see them.
     var vision = "normal" { didSet { applyVision() } }
-    var gridStep: Double { UserDefaults.standard.double(forKey: "gridStep") > 0 ? UserDefaults.standard.double(forKey: "gridStep") : 1 }
+    var gridStep: Double {
+        get { UserDefaults.standard.double(forKey: "gridStep") > 0 ? UserDefaults.standard.double(forKey: "gridStep") : 1 }
+        set { UserDefaults.standard.set(newValue, forKey: "gridStep"); needsDisplay = true }
+    }
     /// Called with the cursor position (mm) and what the pointer is over, for the rulers and the status line.
     var onCursor: ((CGPoint?) -> Void)?
     var onViewChange: (() -> Void)?
@@ -85,6 +90,11 @@ final class CanvasView: NSView, NSTextFieldDelegate {
     /// A path point being dragged: (oid, index).
     private var pointDrag: (String, Int)?
     private var spacingHints: [(vertical: Bool, from: CGPoint, to: CGPoint)] = []
+    /// Cells typed into a table on the canvas whose edit hasn't come back rendered yet (so typing on doesn't lose them).
+    private var tableDraft: (oid: String, rows: [[String]])? { didSet { tableDraftGeneration += 1 } }
+    private(set) var tableDraftGeneration = 0
+    /// The edit of the cells typed up to `gen` has come back: the figure shows them now.
+    func clearTableDraft(_ gen: Int) { if gen == tableDraftGeneration { tableDraft = nil } }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -106,6 +116,7 @@ final class CanvasView: NSView, NSTextFieldDelegate {
     func setFigure(_ f: FigureData?) {
         let sameFigure = f?.name == figure?.name
         figure = f
+        if let d = tableDraft, !sameFigure || f?.element(d.oid) == nil { tableDraft = nil }
         pending = nil
         // keep the selection where its elements still exist
         if let f = f { selection = selection.filter { f.element($0) != nil } } else { selection = [] }
@@ -225,7 +236,7 @@ final class CanvasView: NSView, NSTextFieldDelegate {
         // guides
         let guideColor = Theme.dynamic(light: NSColor(srgbRed: 0, green: 0.6, blue: 0.85, alpha: 0.75), dark: NSColor(srgbRed: 0.3, green: 0.85, blue: 1, alpha: 0.75))
         guideColor.setStroke()
-        for (i, g) in f.guides.enumerated() {
+        for (i, g) in f.guides.enumerated() where showGuides {
             let path = NSBezierPath(); path.lineWidth = 1
             var gx = g.x, gy = g.y
             if case .guide(let idx, _) = drag, idx == i, let lg = liveGuide { if gx != nil { gx = lg } else { gy = lg } }
@@ -398,12 +409,12 @@ final class CanvasView: NSView, NSTextFieldDelegate {
         var ends: (CGPoint, CGPoint)?
         if case .move(_, let oids, let allLabels, _) = drag, moved {
             _ = oids
-            if moving.contains(e.oid) || (allLabels && e.isLabel) { delta = liveDelta }
-            else if !allLabels, let po = e.panelOid, moving.contains(po) { delta = liveDelta }   // a label goes with its panel
+            if moving.contains(e.oid) || (allLabels && e.isLabel && !e.detached) { delta = liveDelta }
+            else if !allLabels, !e.detached, let po = e.panelOid, moving.contains(po) { delta = liveDelta }   // a label goes with its panel (unless unlinked)
         } else if case .resize(let oid, _, _) = drag, oid == e.oid, moved { box = liveBox }
         else if case .endpoint(let oid, _) = drag, oid == e.oid, moved { ends = liveEnds }
         else if let p = pending {
-            if p.oids.contains(e.oid) || (e.panelOid.map { p.oids.contains($0) } ?? false) { delta = p.delta }
+            if p.oids.contains(e.oid) || (!e.detached && (e.panelOid.map { p.oids.contains($0) } ?? false)) { delta = p.delta }
             if let (o, b) = p.box, o == e.oid { box = b }
             if let (o, en) = p.ends, o == e.oid { ends = en }
         }
@@ -616,7 +627,7 @@ final class CanvasView: NSView, NSTextFieldDelegate {
     }
 
     private func hitGuide(_ v: CGPoint) -> Int? {
-        guard let f = figure else { return nil }
+        guard let f = figure, showGuides else { return nil }
         for (i, g) in f.guides.enumerated() {
             if let x = g.x, abs(toView(CGPoint(x: x, y: 0)).x - v.x) < 3 { return i }
             if let y = g.y, abs(toView(CGPoint(x: 0, y: y)).y - v.y) < 3 { return i }
@@ -648,6 +659,9 @@ final class CanvasView: NSView, NSTextFieldDelegate {
         if let c = cropping {
             if let h = cropHandle(v) { drag = .resize(oid: c, handle: h, start: f.element(c)!.box); return }
             endCrop()
+        }
+        if e.clickCount == 2, tool == .select, let el = hit(p), el.kind == "table", let (i, j) = el.tableCell(at: p) {
+            beginCellEditor(el, i, j); return
         }
         if e.clickCount == 2, tool == .select, let el = hit(p) {
             if let t = el.texts.first(where: { $0.box.insetBy(dx: -0.4, dy: -0.4).contains(p) }) {
@@ -686,10 +700,11 @@ final class CanvasView: NSView, NSTextFieldDelegate {
             // a text or mark of a panel is picked by the same click (the panel is still what a drag moves)
             part = e.modifierFlags.contains(.shift) || selection != [el.oid] ? nil : partHit(el, p, marks: true)
             let oids = selection
-            // dragging a label moves every label (they share one offset); ⌥ moves this one only
-            let allLabels = el.isLabel && !e.modifierFlags.contains(.option)
+            // dragging a label moves every label (they share one offset); ⌥ moves this one only, as does dragging a
+            // label unlinked from its panel
+            let allLabels = el.isLabel && !el.detached && !e.modifierFlags.contains(.option)
             moving = movingSet(oids)
-            let base = (allLabels ? f.labels : f.elements.filter { moving.contains($0.oid) }).map(\.box).reduce(CGRect.null) { $0.union($1) }
+            let base = (allLabels ? f.labels.filter { !$0.detached } : f.all.filter { moving.contains($0.oid) }).map(\.box).reduce(CGRect.null) { $0.union($1) }
             drag = .move(start: p, oids: oids, allLabels: allLabels, base: base)
             if e.modifierFlags.contains(.option), !el.isLabel { drag = .move(start: p, oids: oids, allLabels: false, base: base) }
             return
@@ -763,7 +778,7 @@ final class CanvasView: NSView, NSTextFieldDelegate {
             let d = liveDelta
             guard abs(d.x) > 0.001 || abs(d.y) > 0.001 else { return }
             if allLabels {
-                let lab = f.labels.map(\.oid)
+                let lab = f.labels.filter { !$0.detached }.map(\.oid)
                 pending = (Set(lab), d, nil, nil)
                 main?.edit(["op": "move", "oids": [lab.first ?? ""], "dx": d.x, "dy": d.y, "labels": "all"])
             } else {
@@ -868,7 +883,7 @@ final class CanvasView: NSView, NSTextFieldDelegate {
         guard let f = figure else { return ([], []) }
         var xs: [Double] = [0, Double(f.size.width) / 2, Double(f.size.width)]
         var ys: [Double] = [0, Double(f.size.height) / 2, Double(f.size.height)]
-        xs += f.guides.compactMap(\.x); ys += f.guides.compactMap(\.y)
+        if showGuides { xs += f.guides.compactMap(\.x); ys += f.guides.compactMap(\.y) }
         for e in f.elements where !excluding.contains(e.oid) {
             let b = e.box
             xs += [b.minX, b.midX, b.maxX].map(Double.init)
@@ -906,14 +921,14 @@ final class CanvasView: NSView, NSTextFieldDelegate {
         return out
     }
 
-    /// Equal spacing (Illustrator's smart guides): when the gap between the moved box and its neighbour in a row
+    /// Equal spacing (Illustrator's smart guides): when the gap between the moved box and its neighbor in a row
     /// (or column) is nearly the gap between two other elements of that row, the shift that makes it equal, and the
     /// gaps to mark.
     private func equalSpacing(_ b: CGRect, horizontal: Bool, tol: Double) -> (CGFloat, [(vertical: Bool, from: CGPoint, to: CGPoint)])? {
         guard let f = figure else { return nil }
         let others = f.elements.filter { !moving.contains($0.oid) && !selection.contains($0.oid) && $0.pickable && $0.kind != "layout"
             && $0.parentOid == nil && $0.box.width > 0.5 && $0.box.height > 0.5 }.map(\.box)
-        // the band the box shares with its neighbours
+        // the band the box shares with its neighbors
         let row = others.filter { horizontal ? ($0.maxY > b.minY && $0.minY < b.maxY) : ($0.maxX > b.minX && $0.minX < b.maxX) }
         let sorted = row.sorted { horizontal ? $0.minX < $1.minX : $0.minY < $1.minY }
         var gaps: [(CGFloat, CGRect, CGRect)] = []
@@ -1038,7 +1053,13 @@ final class CanvasView: NSView, NSTextFieldDelegate {
             beginEditor(oid: el.oid, at: CGPoint(x: el.p("x") ?? el.box.minX, y: el.box.minY),
                         size: el.p("size") ?? (figure?.style["size"] as? NSNumber)?.doubleValue ?? 7, text: el.s("text") ?? "", align: el.s("align"))
         case "label":
-            beginEditor(oid: el.oid, at: el.box.origin, size: (figure?.labelStyle["size"] as? NSNumber)?.doubleValue ?? 8, text: el.text ?? "")
+            // double-click unlinks a label from its panel (each then moves on its own), or links it again;
+            // ⌥-double-click retypes it
+            if NSEvent.modifierFlags.contains(.option) {
+                beginEditor(oid: el.oid, at: el.box.origin, size: (figure?.labelStyle["size"] as? NSNumber)?.doubleValue ?? 8, text: el.text ?? "")
+            } else {
+                main?.toggleLabelLink(el.oid)
+            }
         case "bracket":
             main?.promptText("Bracket text", el.s("text") ?? "") { [weak self] t in self?.main?.edit(["op": "set", "oid": el.oid, "props": ["text": t]]) }
         case "image" where el.parentOid == nil:
@@ -1068,12 +1089,42 @@ final class CanvasView: NSView, NSTextFieldDelegate {
         needsDisplay = true
     }
 
+    /// A table's cells as last typed: the canvas's draft, else the figure's.
+    func tableDraftRows(_ e: Element) -> [[String]] {
+        if let d = tableDraft, d.oid == e.oid { return d.rows }
+        let r = e.tableCells
+        return r.isEmpty ? [[""]] : r
+    }
+
+    /// Type into a cell of a table, in place (Tab: the next cell, ⇧Tab the one before, Return: done).
+    func beginCellEditor(_ el: Element, _ i: Int, _ j: Int) {
+        guard let b = el.tableCellBox(i, j) else { return }
+        let rows = tableDraftRows(el)
+        let text = i < rows.count && j < rows[i].count ? rows[i][j] : ""
+        let size = el.p("size") ?? (figure?.style["size"] as? NSNumber)?.doubleValue ?? 7
+        beginEditor(oid: el.oid, at: CGPoint(x: b.minX, y: b.minY + max(0, (b.height - size * 25.4 / 72 * 1.25) / 2)), size: size, text: text, key: "cell:\(i):\(j)")
+        if let f = editor { f.frame.size.width = max(f.frame.width, toView(CGPoint(x: b.maxX, y: 0)).x - toView(CGPoint(x: b.minX, y: 0)).x + 6) }
+    }
+
     func commitEditor() {
         guard let f = editor, let ed = editing else { return }
         let text = f.stringValue
         editor = nil; editing = nil
         f.removeFromSuperview()
         needsDisplay = true
+        if let oid = ed.oid, let key = ed.key, key.hasPrefix("cell:"), let el = figure?.element(oid) {
+            let ij = key.split(separator: ":").compactMap { Int($0) }
+            guard ij.count == 2 else { return }
+            var rows = tableDraftRows(el)
+            let width = max(rows.map(\.count).max() ?? 1, ij[1] + 1)
+            while rows.count <= ij[0] { rows.append(Array(repeating: "", count: width)) }
+            for k in rows.indices where rows[k].count < width { rows[k] += Array(repeating: "", count: width - rows[k].count) }
+            guard rows[ij[0]][ij[1]] != text else { return }
+            rows[ij[0]][ij[1]] = text
+            tableDraft = (oid, rows)
+            main?.applyTableCells(oid, rows)
+            return
+        }
         if let oid = ed.oid, let key = ed.key {
             if text != ed.old { main?.edit(["op": "panel_text", "oid": oid, "key": key, "text": text, "old": ed.old ?? ""]) }
         } else if let oid = ed.oid {
@@ -1095,6 +1146,18 @@ final class CanvasView: NSView, NSTextFieldDelegate {
     func control(_ control: NSControl, textView: NSTextView, doCommandBy s: Selector) -> Bool {
         if s == #selector(NSResponder.insertNewline(_:)) { commitEditor(); window?.makeFirstResponder(self); return true }
         if s == #selector(NSResponder.cancelOperation(_:)) { cancelEditor(); return true }
+        // in a table's cell, Tab and ⇧Tab go to the next and previous cell
+        if s == #selector(NSResponder.insertTab(_:)) || s == #selector(NSResponder.insertBacktab(_:)),
+           let ed = editing, let key = ed.key, key.hasPrefix("cell:"), let oid = ed.oid, let el = figure?.element(oid) {
+            let ij = key.split(separator: ":").compactMap { Int($0) }
+            let nr = el.gridRows.count, nc = max(1, el.gridCols.count)
+            guard ij.count == 2, nr > 0 else { return false }
+            var k = ij[0] * nc + ij[1] + (s == #selector(NSResponder.insertTab(_:)) ? 1 : -1)
+            k = (k + nr * nc) % (nr * nc)
+            commitEditor()
+            beginCellEditor(el, k / nc, k % nc)
+            return true
+        }
         return false
     }
     func controlTextDidEndEditing(_ obj: Notification) { if editor != nil { commitEditor() } }
@@ -1144,9 +1207,9 @@ final class CanvasView: NSView, NSTextFieldDelegate {
     func typeInEditor(_ text: String) { editor?.stringValue = text; commitEditor() }
     var isEditingText: Bool { editor != nil }
 
-    // MARK: colour vision
+    // MARK: color vision
 
-    /// A sprite as a reader with a colour vision deficiency sees it (converted once per sprite and mode).
+    /// A sprite as a reader with a color vision deficiency sees it (converted once per sprite and mode).
     private func visionImage(_ file: String) -> CGImage? {
         let key = file + "|" + vision
         if let i = visionImages[key] { return i }
@@ -1173,7 +1236,7 @@ final class CanvasView: NSView, NSTextFieldDelegate {
         case "deuteranopia": rows = [[0.367322, 0.860646, -0.227968], [0.280085, 0.672501, 0.047413], [-0.011820, 0.042940, 0.968881]]
         case "protanopia": rows = [[0.152286, 1.052583, -0.204868], [0.114503, 0.786281, 0.099216], [-0.003882, -0.048116, 1.051998]]
         case "tritanopia": rows = [[1.255528, -0.076749, -0.178779], [-0.078411, 0.930809, 0.147602], [0.004733, 0.691367, 0.303900]]
-        case "greyscale": rows = [[0.2126, 0.7152, 0.0722], [0.2126, 0.7152, 0.0722], [0.2126, 0.7152, 0.0722]]
+        case "grayscale": rows = [[0.2126, 0.7152, 0.0722], [0.2126, 0.7152, 0.0722], [0.2126, 0.7152, 0.0722]]
         default: return nil
         }
         guard let f = CIFilter(name: "CIColorMatrix") else { return nil }
