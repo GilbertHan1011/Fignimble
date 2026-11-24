@@ -1,7 +1,7 @@
 {
   "apiVersion": "gewu.plugin/v1",
   "id": "fignimble",
-  "version": "0.1.16",
+  "version": "0.1.17",
   "title": "Fignimble",
   "scope": "resource",
   "backend": {
