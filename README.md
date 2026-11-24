@@ -1,5 +1,7 @@
 # Fignimble
 
+[![Downloads](https://img.shields.io/github/downloads/pachterlab/Fignimble/total?label=Downloads)](https://github.com/pachterlab/Fignimble/releases)
+
 Fignimble assembles multi-panel figures for publication, the part of Illustrator scientists actually use, with Python
 underneath everything. Each figure is a short Python file that places panels, pictures, text and arrows; each panel
 is drawn by matplotlib code. You edit a figure on the canvas (drag, resize, align, retype), in the code pane, or by
