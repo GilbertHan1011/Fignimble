@@ -1,0 +1,1537 @@
+[
+  {
+    "name": "state",
+    "description": "List the project's figures, current revision, undo/redo and engine capabilities. Start here; every write needs the revision it returns.",
+    "effect": "read",
+    "target": "backend",
+    "exposeToAgent": true,
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {
+        "cursor": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200
+        }
+      }
+    },
+    "outputSchema": {
+      "type": "object",
+      "required": [
+        "project",
+        "revision",
+        "figures"
+      ],
+      "properties": {
+        "project": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "figures": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "canUndo": {
+          "type": "boolean"
+        },
+        "canRedo": {
+          "type": "boolean"
+        },
+        "undoLabel": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "redoLabel": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "engine": {
+          "type": "object"
+        },
+        "limits": {
+          "type": "object"
+        }
+      }
+    }
+  },
+  {
+    "name": "figure",
+    "description": "Read one figure: millimetre size, elements, labels, style, guides and warnings, plus a preview, scene and sprite resources. Use its snapshotId for canvas edits.",
+    "effect": "read",
+    "target": "backend",
+    "exposeToAgent": true,
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "figure"
+      ],
+      "properties": {
+        "figure": {
+          "type": "string",
+          "minLength": 1
+        },
+        "cursor": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200
+        },
+        "pxPerMM": {
+          "type": "number",
+          "minimum": 1,
+          "maximum": 30
+        }
+      }
+    },
+    "outputSchema": {
+      "type": "object",
+      "required": [
+        "figure",
+        "snapshotId",
+        "revision",
+        "elements"
+      ],
+      "properties": {
+        "figure": {
+          "type": "string"
+        },
+        "size": {
+          "type": "array"
+        },
+        "elements": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "labels": {
+          "type": "array"
+        },
+        "guides": {
+          "type": "array"
+        },
+        "warnings": {
+          "type": "object"
+        },
+        "page": {
+          "type": "object"
+        },
+        "style": {
+          "type": "object"
+        },
+        "labelStyle": {
+          "type": "object"
+        },
+        "journal": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "snapshotId": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "scene": {
+          "type": "object",
+          "required": [
+            "uri",
+            "type",
+            "revision"
+          ],
+          "properties": {
+            "uri": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string"
+            },
+            "mimeType": {
+              "type": "string"
+            },
+            "revision": {
+              "type": "string"
+            }
+          }
+        },
+        "preview": {
+          "anyOf": [
+            {
+              "type": "object",
+              "required": [
+                "uri",
+                "type",
+                "revision"
+              ],
+              "properties": {
+                "uri": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "mimeType": {
+                  "type": "string"
+                },
+                "revision": {
+                  "type": "string"
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "thumb": {
+          "anyOf": [
+            {
+              "type": "object",
+              "required": [
+                "uri",
+                "type",
+                "revision"
+              ],
+              "properties": {
+                "uri": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "mimeType": {
+                  "type": "string"
+                },
+                "revision": {
+                  "type": "string"
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "new_figure",
+    "description": "Create a figure file (and style.py when the project has none). An existing name is an error; nothing is renamed.",
+    "effect": "write",
+    "target": "backend",
+    "exposeToAgent": true,
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "width",
+        "height"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+        },
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1000
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1000
+        },
+        "journal": {
+          "type": "string"
+        },
+        "expectedRevision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "outputSchema": {
+      "type": "object",
+      "required": [
+        "figure",
+        "revision"
+      ],
+      "properties": {
+        "figure": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "import_asset",
+    "description": "Place a workspace image (PNG/JPEG/TIFF/PDF/SVG), panel .py or CSV/TSV on a figure. Files inside the workspace are copied into the project by the engine.",
+    "effect": "write",
+    "target": "backend",
+    "exposeToAgent": true,
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "figure",
+        "path",
+        "expectedRevision",
+        "snapshotId"
+      ],
+      "properties": {
+        "figure": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "w": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "expectedRevision": {
+          "type": "string"
+        },
+        "snapshotId": {
+          "type": "string"
+        }
+      }
+    },
+    "outputSchema": {
+      "type": "object",
+      "required": [
+        "figure",
+        "revision"
+      ],
+      "properties": {
+        "figure": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "file": {
+          "type": "string"
+        },
+        "snapshotId": {
+          "type": "string"
+        },
+        "scene": {
+          "type": "object",
+          "required": [
+            "uri",
+            "type",
+            "revision"
+          ],
+          "properties": {
+            "uri": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string"
+            },
+            "mimeType": {
+              "type": "string"
+            },
+            "revision": {
+              "type": "string"
+            }
+          }
+        },
+        "preview": {
+          "anyOf": [
+            {
+              "type": "object",
+              "required": [
+                "uri",
+                "type",
+                "revision"
+              ],
+              "properties": {
+                "uri": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "mimeType": {
+                  "type": "string"
+                },
+                "revision": {
+                  "type": "string"
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "thumb": {
+          "anyOf": [
+            {
+              "type": "object",
+              "required": [
+                "uri",
+                "type",
+                "revision"
+              ],
+              "properties": {
+                "uri": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "mimeType": {
+                  "type": "string"
+                },
+                "revision": {
+                  "type": "string"
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "edit",
+    "description": "Change the figure with one native Fignimble operation: set, move, resize, endpoints, insert, delete, duplicate, order, align, distribute, match, group, ungroup, figure, style, labels, guide_*, panel_text*, panel_color, make_layout, release_layout, divider, crop, rotate, flip. OIDs are the ones in that preview and the write needs its revision.",
+    "effect": "write",
+    "target": "backend",
+    "exposeToAgent": true,
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "figure",
+        "expectedRevision",
+        "snapshotId",
+        "op"
+      ],
+      "properties": {
+        "figure": {
+          "type": "string"
+        },
+        "expectedRevision": {
+          "type": "string"
+        },
+        "snapshotId": {
+          "type": "string"
+        },
+        "op": {
+          "type": "string",
+          "enum": [
+            "set",
+            "move",
+            "resize",
+            "endpoints",
+            "insert",
+            "delete",
+            "duplicate",
+            "order",
+            "align",
+            "distribute",
+            "match",
+            "group",
+            "ungroup",
+            "figure",
+            "style",
+            "labels",
+            "guide_add",
+            "guide_move",
+            "guide_delete",
+            "guide_clear",
+            "panel_text",
+            "panel_text_style",
+            "panel_text_reset",
+            "panel_color",
+            "make_layout",
+            "release_layout",
+            "divider",
+            "crop",
+            "rotate",
+            "flip"
+          ]
+        },
+        "oids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 500
+        }
+      }
+    },
+    "outputSchema": {
+      "type": "object",
+      "required": [
+        "figure",
+        "revision"
+      ],
+      "properties": {
+        "figure": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "unchanged": {
+          "type": "boolean"
+        },
+        "select": {
+          "type": "array"
+        },
+        "snapshotId": {
+          "type": "string"
+        },
+        "scene": {
+          "type": "object",
+          "required": [
+            "uri",
+            "type",
+            "revision"
+          ],
+          "properties": {
+            "uri": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string"
+            },
+            "mimeType": {
+              "type": "string"
+            },
+            "revision": {
+              "type": "string"
+            }
+          }
+        },
+        "preview": {
+          "anyOf": [
+            {
+              "type": "object",
+              "required": [
+                "uri",
+                "type",
+                "revision"
+              ],
+              "properties": {
+                "uri": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "mimeType": {
+                  "type": "string"
+                },
+                "revision": {
+                  "type": "string"
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "thumb": {
+          "anyOf": [
+            {
+              "type": "object",
+              "required": [
+                "uri",
+                "type",
+                "revision"
+              ],
+              "properties": {
+                "uri": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "mimeType": {
+                  "type": "string"
+                },
+                "revision": {
+                  "type": "string"
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "source",
+    "description": "Read a figure, style or panel Python file, a bounded number of lines at a time.",
+    "effect": "read",
+    "target": "backend",
+    "exposeToAgent": true,
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "file"
+      ],
+      "properties": {
+        "file": {
+          "type": "string",
+          "pattern": "\\.py$"
+        },
+        "startLine": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "maxLines": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 400
+        }
+      }
+    },
+    "outputSchema": {
+      "type": "object",
+      "required": [
+        "file",
+        "revision",
+        "text"
+      ],
+      "properties": {
+        "file": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "startLine": {
+          "type": "integer"
+        },
+        "totalLines": {
+          "type": "integer"
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "source": {
+          "type": "object",
+          "required": [
+            "uri",
+            "type",
+            "revision"
+          ],
+          "properties": {
+            "uri": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string"
+            },
+            "mimeType": {
+              "type": "string"
+            },
+            "revision": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "edit_source",
+    "description": "Write a project Python file after checking its revision (null creates a file). The write is one undo step in the same history as canvas edits.",
+    "effect": "write",
+    "target": "backend",
+    "exposeToAgent": true,
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "file",
+        "text",
+        "expectedRevision"
+      ],
+      "properties": {
+        "file": {
+          "type": "string",
+          "pattern": "\\.py$"
+        },
+        "text": {
+          "type": "string"
+        },
+        "expectedRevision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "figure": {
+          "type": "string"
+        }
+      }
+    },
+    "outputSchema": {
+      "type": "object",
+      "required": [
+        "file",
+        "revision"
+      ],
+      "properties": {
+        "file": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "source": {
+          "type": "object",
+          "required": [
+            "uri",
+            "type",
+            "revision"
+          ],
+          "properties": {
+            "uri": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string"
+            },
+            "mimeType": {
+              "type": "string"
+            },
+            "revision": {
+              "type": "string"
+            }
+          }
+        },
+        "snapshotId": {
+          "type": "string"
+        },
+        "scene": {
+          "type": "object",
+          "required": [
+            "uri",
+            "type",
+            "revision"
+          ],
+          "properties": {
+            "uri": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string"
+            },
+            "mimeType": {
+              "type": "string"
+            },
+            "revision": {
+              "type": "string"
+            }
+          }
+        },
+        "preview": {
+          "anyOf": [
+            {
+              "type": "object",
+              "required": [
+                "uri",
+                "type",
+                "revision"
+              ],
+              "properties": {
+                "uri": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "mimeType": {
+                  "type": "string"
+                },
+                "revision": {
+                  "type": "string"
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "thumb": {
+          "anyOf": [
+            {
+              "type": "object",
+              "required": [
+                "uri",
+                "type",
+                "revision"
+              ],
+              "properties": {
+                "uri": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "mimeType": {
+                  "type": "string"
+                },
+                "revision": {
+                  "type": "string"
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "render",
+    "description": "Render a figure now: a full PNG preview, the scene resource and its warnings.",
+    "effect": "read",
+    "target": "backend",
+    "exposeToAgent": true,
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "figure"
+      ],
+      "properties": {
+        "figure": {
+          "type": "string"
+        },
+        "dark": {
+          "type": "boolean"
+        },
+        "pxPerMM": {
+          "type": "number",
+          "minimum": 1,
+          "maximum": 30
+        }
+      }
+    },
+    "outputSchema": {
+      "type": "object",
+      "required": [
+        "figure",
+        "revision"
+      ],
+      "properties": {
+        "figure": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "size": {
+          "type": "array"
+        },
+        "elements": {
+          "type": "integer"
+        },
+        "warnings": {
+          "type": "integer"
+        },
+        "snapshotId": {
+          "type": "string"
+        },
+        "scene": {
+          "type": "object",
+          "required": [
+            "uri",
+            "type",
+            "revision"
+          ],
+          "properties": {
+            "uri": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string"
+            },
+            "mimeType": {
+              "type": "string"
+            },
+            "revision": {
+              "type": "string"
+            }
+          }
+        },
+        "preview": {
+          "anyOf": [
+            {
+              "type": "object",
+              "required": [
+                "uri",
+                "type",
+                "revision"
+              ],
+              "properties": {
+                "uri": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "mimeType": {
+                  "type": "string"
+                },
+                "revision": {
+                  "type": "string"
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "thumb": {
+          "anyOf": [
+            {
+              "type": "object",
+              "required": [
+                "uri",
+                "type",
+                "revision"
+              ],
+              "properties": {
+                "uri": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "mimeType": {
+                  "type": "string"
+                },
+                "revision": {
+                  "type": "string"
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "preflight",
+    "description": "The journal's quality checks for a figure: text size, picture dpi, Type 3 fonts, out-of-figure elements, duplicate labels and figure width.",
+    "effect": "read",
+    "target": "backend",
+    "exposeToAgent": true,
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "figure"
+      ],
+      "properties": {
+        "figure": {
+          "type": "string"
+        },
+        "cursor": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200
+        }
+      }
+    },
+    "outputSchema": {
+      "type": "object",
+      "required": [
+        "figure",
+        "counts",
+        "warnings"
+      ],
+      "properties": {
+        "figure": {
+          "type": "string"
+        },
+        "counts": {
+          "type": "object"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "page": {
+          "type": "object"
+        },
+        "revision": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "undo",
+    "description": "Undo the last edit (canvas or source). A conflict with someone else's newer edit is reported, and the history is kept.",
+    "effect": "write",
+    "target": "backend",
+    "exposeToAgent": true,
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "expectedRevision"
+      ],
+      "properties": {
+        "expectedRevision": {
+          "type": "string"
+        },
+        "figure": {
+          "type": "string"
+        }
+      }
+    },
+    "outputSchema": {
+      "type": "object",
+      "required": [
+        "revision"
+      ],
+      "properties": {
+        "revision": {
+          "type": "string"
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "figure": {
+          "type": "string"
+        },
+        "snapshotId": {
+          "type": "string"
+        },
+        "scene": {
+          "type": "object",
+          "required": [
+            "uri",
+            "type",
+            "revision"
+          ],
+          "properties": {
+            "uri": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string"
+            },
+            "mimeType": {
+              "type": "string"
+            },
+            "revision": {
+              "type": "string"
+            }
+          }
+        },
+        "preview": {
+          "anyOf": [
+            {
+              "type": "object",
+              "required": [
+                "uri",
+                "type",
+                "revision"
+              ],
+              "properties": {
+                "uri": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "mimeType": {
+                  "type": "string"
+                },
+                "revision": {
+                  "type": "string"
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "thumb": {
+          "anyOf": [
+            {
+              "type": "object",
+              "required": [
+                "uri",
+                "type",
+                "revision"
+              ],
+              "properties": {
+                "uri": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "mimeType": {
+                  "type": "string"
+                },
+                "revision": {
+                  "type": "string"
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "redo",
+    "description": "Redo the last undone edit.",
+    "effect": "write",
+    "target": "backend",
+    "exposeToAgent": true,
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "expectedRevision"
+      ],
+      "properties": {
+        "expectedRevision": {
+          "type": "string"
+        },
+        "figure": {
+          "type": "string"
+        }
+      }
+    },
+    "outputSchema": {
+      "type": "object",
+      "required": [
+        "revision"
+      ],
+      "properties": {
+        "revision": {
+          "type": "string"
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "figure": {
+          "type": "string"
+        },
+        "snapshotId": {
+          "type": "string"
+        },
+        "scene": {
+          "type": "object",
+          "required": [
+            "uri",
+            "type",
+            "revision"
+          ],
+          "properties": {
+            "uri": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string"
+            },
+            "mimeType": {
+              "type": "string"
+            },
+            "revision": {
+              "type": "string"
+            }
+          }
+        },
+        "preview": {
+          "anyOf": [
+            {
+              "type": "object",
+              "required": [
+                "uri",
+                "type",
+                "revision"
+              ],
+              "properties": {
+                "uri": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "mimeType": {
+                  "type": "string"
+                },
+                "revision": {
+                  "type": "string"
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "thumb": {
+          "anyOf": [
+            {
+              "type": "object",
+              "required": [
+                "uri",
+                "type",
+                "revision"
+              ],
+              "properties": {
+                "uri": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "mimeType": {
+                  "type": "string"
+                },
+                "revision": {
+                  "type": "string"
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "export",
+    "description": "Export a figure as PDF, SVG, PNG, TIFF or JPEG, with the journal's resolution rules, and return the file plus provenance.",
+    "effect": "write",
+    "target": "backend",
+    "exposeToAgent": true,
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "figure",
+        "format",
+        "expectedRevision"
+      ],
+      "properties": {
+        "figure": {
+          "type": "string"
+        },
+        "format": {
+          "type": "string",
+          "enum": [
+            "pdf",
+            "svg",
+            "png",
+            "tiff",
+            "jpg"
+          ]
+        },
+        "dpi": {
+          "type": "integer",
+          "minimum": 72,
+          "maximum": 2400
+        },
+        "journal": {
+          "type": "string"
+        },
+        "dark": {
+          "type": "boolean"
+        },
+        "expectedRevision": {
+          "type": "string"
+        }
+      }
+    },
+    "outputSchema": {
+      "type": "object",
+      "required": [
+        "figure",
+        "format",
+        "sha256",
+        "export"
+      ],
+      "properties": {
+        "figure": {
+          "type": "string"
+        },
+        "format": {
+          "type": "string"
+        },
+        "filename": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "bytes": {
+          "type": "integer"
+        },
+        "resolution": {
+          "type": "object"
+        },
+        "export": {
+          "type": "object",
+          "required": [
+            "uri",
+            "type",
+            "revision"
+          ],
+          "properties": {
+            "uri": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string"
+            },
+            "mimeType": {
+              "type": "string"
+            },
+            "revision": {
+              "type": "string"
+            }
+          }
+        },
+        "provenance": {
+          "type": "object",
+          "required": [
+            "uri",
+            "type",
+            "revision"
+          ],
+          "properties": {
+            "uri": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string"
+            },
+            "mimeType": {
+              "type": "string"
+            },
+            "revision": {
+              "type": "string"
+            }
+          }
+        },
+        "revision": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "editor_state",
+    "description": "The editor's change counter and undo state; poll it to notice outside edits.",
+    "effect": "read",
+    "target": "backend",
+    "exposeToAgent": false,
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {
+        "cursor": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200
+        }
+      }
+    },
+    "outputSchema": {
+      "type": "object",
+      "required": [
+        "version",
+        "revision"
+      ],
+      "properties": {
+        "version": {
+          "type": "integer"
+        },
+        "changed": {
+          "type": "boolean"
+        },
+        "dirty": {
+          "type": "boolean"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "canUndo": {
+          "type": "boolean"
+        },
+        "canRedo": {
+          "type": "boolean"
+        },
+        "undoLabel": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "redoLabel": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "assets",
+    "description": "Files in the workspace that can be placed on a figure.",
+    "effect": "read",
+    "target": "backend",
+    "exposeToAgent": false,
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {
+        "directory": {
+          "type": "string"
+        },
+        "cursor": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200
+        }
+      }
+    },
+    "outputSchema": {
+      "type": "object",
+      "required": [
+        "assets"
+      ],
+      "properties": {
+        "assets": {
+          "type": "array"
+        },
+        "page": {
+          "type": "object"
+        }
+      }
+    }
+  },
+  {
+    "name": "journals",
+    "description": "The journal presets (widths, fonts, label style, resolutions).",
+    "effect": "read",
+    "target": "backend",
+    "exposeToAgent": false,
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {}
+    },
+    "outputSchema": {
+      "type": "object",
+      "required": [
+        "journals"
+      ],
+      "properties": {
+        "journals": {
+          "type": "object"
+        }
+      }
+    }
+  }
+]

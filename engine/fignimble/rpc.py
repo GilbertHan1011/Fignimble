@@ -15,7 +15,7 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor
 
 from . import mirror, remote, templates
-from .core import Session
+from .core import Cancelled, CancelToken, Session
 
 _out = os.fdopen(os.dup(1), "w", buffering=1, encoding="utf-8")
 sys.stdout = sys.stderr
@@ -45,7 +45,7 @@ def main():
         where = os.path.expanduser(a["project"])
         if far and not os.path.isabs(where):           # a server folder as typed: from the home folder
             where = os.path.join(os.path.expanduser("~"), where)
-        s = Session(where, python)
+        s = Session(where, python, manage_agent_files=bool(a.get("manageAgentFiles", True)))
         s.on_event = send
         app["s"] = s
         return {"ok": True, "project": str(s.project)}
@@ -70,6 +70,20 @@ def main():
     def project():
         return app["s"].project if app["s"] else None
 
+    tokens: dict = {}
+    tlock = threading.Lock()
+
+    def cancel(a):
+        """Stop the worker for one in-flight request. The request itself still replies, with CANCELLED."""
+        with tlock:
+            tok = tokens.get(a.get("requestId"))
+        if tok is None:
+            return {"state": "not_found"}
+        if tok.cancelled:
+            return {"state": "already_settled"}
+        tok.cancel()
+        return {"state": "requested"}
+
     def close(a):
         if app["s"]:
             app["s"].close()
@@ -83,6 +97,7 @@ def main():
         "requirements": requirements,
         "install": install,
         "state": lambda a: need().api_state(),
+        "cancel": cancel,
         "figure": lambda a: need().api_figure(a),
         "edit": lambda a: need().edit(a),
         "write_source": lambda a: need().write_source(a),
@@ -118,15 +133,26 @@ def main():
     pool = ThreadPoolExecutor(max_workers=6)
 
     def run(req):
+        tok = CancelToken()
+        with tlock:
+            tokens[req.get("id")] = tok
         try:
+            s = app["s"]
+            if s is not None:
+                s.bind(tok)
             res = handlers[req["cmd"]](req)
             msg = {"id": req["id"], "result": res}
             if far:
                 msg["files"] = far.attach(res, app["s"].cache if app["s"] else None)
             send(msg)
+        except Cancelled:
+            send({"id": req.get("id"), "error": "CANCELLED: the request was cancelled"})
         except BaseException as exc:  # noqa: BLE001
             traceback.print_exc()
             send({"id": req.get("id"), "error": str(exc)})
+        finally:
+            with tlock:
+                tokens.pop(req.get("id"), None)
 
     for line in sys.stdin:
         line = line.strip()

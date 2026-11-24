@@ -1,0 +1,35 @@
+{
+  "schemaVersion": "gewu.runtime-plan/v1",
+  "policies": ["external", "managed"],
+  "providers": [
+    {
+      "kind": "external",
+      "id": "fignimble-python",
+      "target": {"os": "linux", "arch": "x86_64", "libc": "glibc"},
+      "executable": {
+        "env": "FIGNIMBLE_PYTHON",
+        "commands": ["python3.11", "python3"]
+      },
+      "probe": {
+        "args": ["-c", "import matplotlib, fitz, PIL, numpy"],
+        "timeoutSeconds": 120
+      },
+      "binaries": {"python3": "{executable}", "python": "{executable}", "launch": "{executable}"}
+    },
+    {
+      "kind": "managed",
+      "id": "fignimble-micromamba",
+      "target": {"os": "linux", "arch": "x86_64", "libc": "glibc"},
+      "manager": "micromamba",
+      "channels": ["conda-forge"],
+      "packages": ["python=3.11"],
+      "pipExtraIndex": "https://pypi.org/simple",
+      "pip": ["matplotlib>=3.7,<4", "pymupdf>=1.24,<2", "Pillow>=10,<14", "numpy>=1.24,<3"],
+      "probe": {
+        "args": ["-c", "import matplotlib, fitz, PIL, numpy"],
+        "timeoutSeconds": 900
+      },
+      "binaries": {"python3": "{executable}", "python": "{executable}", "launch": "{executable}"}
+    }
+  ]
+}

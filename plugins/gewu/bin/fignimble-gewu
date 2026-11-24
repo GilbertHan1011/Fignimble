@@ -1,0 +1,13 @@
+#!/bin/sh
+# GeWu entry point for the Fignimble adapter.
+here=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+PYTHON="${FIGNIMBLE_GEWU_PYTHON:-python3}"
+BOUND_PYTHON='@PYTHON@'
+if [ -x "$BOUND_PYTHON" ]; then PYTHON="$BOUND_PYTHON"; fi
+if [ -n "$GEWU_RUNTIME_ROOT" ] && [ -x "$GEWU_RUNTIME_ROOT/bin/python" ]; then
+  PYTHON="$GEWU_RUNTIME_ROOT/bin/python"
+fi
+export FIGNIMBLE_GEWU_PYTHON="$PYTHON"
+export PYTHONPATH="$here/lib:$here/engine${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONDONTWRITEBYTECODE=1
+exec "$PYTHON" "$here/adapter.py"

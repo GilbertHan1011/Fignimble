@@ -5,6 +5,7 @@
 
 import shutil
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -722,6 +723,7 @@ def test_cached_runs_once(tmp_path):
         assert load(2) == 2 and load(2) == 2
         api._CACHE.clear()                       # a new process: from disk
         assert load(2) == 2 and calls.read_text() == "x"
+        time.sleep(0.01)                         # filesystems with millisecond mtimes need a new stamp
         (tmp_path / "data.csv").write_text("5\n")
         assert load(2) == 10 and calls.read_text() == "xx"
     finally:

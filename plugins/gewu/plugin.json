@@ -1,0 +1,86 @@
+{
+  "apiVersion": "gewu.plugin/v1",
+  "id": "fignimble",
+  "version": "0.1.16",
+  "title": "Fignimble",
+  "scope": "resource",
+  "backend": {
+    "connector": "gewu-stdio",
+    "config": {
+      "entry": "bin/fignimble-gewu"
+    }
+  },
+  "settingsSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "python": {
+        "type": "string",
+        "minLength": 1
+      },
+      "engineRoot": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  },
+  "views": [
+    {
+      "id": "editor",
+      "title": "Figure editor",
+      "kind": "webview",
+      "placement": "main",
+      "entry": "web/index.html",
+      "resourceTypes": [
+        "fignimble.project"
+      ],
+      "stateSchema": {
+        "type": "object",
+        "properties": {
+          "figure": {
+            "type": "string"
+          },
+          "zoom": {
+            "type": "number"
+          },
+          "pan": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          },
+          "selection": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "snapshotId": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "source",
+      "title": "Figure source",
+      "kind": "builtin",
+      "placement": "sidebar",
+      "resourceTypes": [
+        "fignimble.source"
+      ],
+      "renderer": "text"
+    },
+    {
+      "id": "preview",
+      "title": "Figure preview",
+      "kind": "builtin",
+      "placement": "sidebar",
+      "resourceTypes": [
+        "fignimble.preview"
+      ],
+      "renderer": "preview"
+    }
+  ]
+}

@@ -992,7 +992,7 @@ class Renderer:
         return {"file": str(out), "x": x - pad, "y": y - pad, "w": W, "h": H}
 
     def render(self, file: str, px_per_mm: float = 12.0, sprites: bool = True, thumb_px: int = 320,
-               dark: bool = False) -> dict:
+               dark: bool = False, preview: bool = False) -> dict:
         """Run and draw a figure file: what the editor shows and edits. `dark`: its dark version."""
         self._docs.clear()
         self.dark = dark
@@ -1009,6 +1009,11 @@ class Renderer:
         z = thumb_px / max(page.rect.width, page.rect.height)
         thumb = out / f"{name}{'.dark' if dark else ''}.thumb.png"
         page.get_pixmap(matrix=pymupdf.Matrix(z, z), alpha=False).save(str(thumb))
+        shot = None
+        if preview:
+            # The whole figure as one PNG: what GeWu's Preview and an agent look at.
+            shot = out / f"{name}{'.dark' if dark else ''}.preview.png"
+            page.get_pixmap(matrix=pymupdf.Matrix(px_per_mm / MM, px_per_mm / MM), alpha=False).save(str(shot))
         by_oid = {i["oid"]: i for i in infos + labels}
         if sprites:
             for pc in pieces:
@@ -1035,6 +1040,7 @@ class Renderer:
             "caption": {"text": fig.caption_text, "site": fig.caption_site},
             "warnings": self.preflight(fig, pieces, infos, labels),
             "thumb": str(thumb),
+            **({"preview": str(shot)} if shot else {}),
             "pxPerMM": px_per_mm,
         }
 

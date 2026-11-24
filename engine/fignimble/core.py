@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ast
 import difflib
+import hashlib
 import re
 import json
 import os
@@ -41,6 +42,49 @@ def log(*a):
     print("[fignimble]", *a, file=sys.stderr, flush=True)
 
 
+class Cancelled(Exception):
+    """A request was cancelled; nothing of it is running any more."""
+
+
+class CancelToken:
+    """One request's cancellation flag, shared with the RPC layer."""
+
+    def __init__(self):
+        self.event = threading.Event()
+
+    def cancel(self):
+        self.event.set()
+
+    @property
+    def cancelled(self) -> bool:
+        return self.event.is_set()
+
+
+def _revision(path: Path) -> str | None:
+    """Content hash of a project file, or None when it does not exist."""
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except FileNotFoundError:
+        return None
+
+
+def _atomic_write(path: Path, text: str):
+    """Replace a text file in one step, so a crash never leaves half a file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    mode = path.stat().st_mode & 0o7777 if path.exists() else 0o644
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
 class WorkerProc:
     """The render worker process (fignimble.worker): one request at a time, restarted if it dies or hangs."""
 
@@ -65,7 +109,7 @@ class WorkerProc:
             q.put(None)
         threading.Thread(target=pump, daemon=True).start()
 
-    def request(self, req: dict, timeout: float = 180) -> dict:
+    def request(self, req: dict, timeout: float = 180, cancel: CancelToken | None = None) -> dict:
         with self.lock:
             if self.proc is None or self.proc.poll() is not None:
                 self._start()
@@ -79,15 +123,20 @@ class WorkerProc:
                 raise RuntimeError("the render worker stopped; try again") from None
             deadline = time.time() + timeout
             while True:
-                try:
-                    ln = self.lines.get(timeout=max(0.05, deadline - time.time()))
-                except queue.Empty:
+                if cancel is not None and cancel.cancelled:
                     self.kill()
-                    raise RuntimeError(f"rendering took longer than {timeout:.0f} s and was stopped "
-                                       "(a panel's code may loop forever)") from None
+                    raise Cancelled("the request was cancelled")
+                try:
+                    ln = self.lines.get(timeout=0.05)
+                except queue.Empty:
+                    if time.time() > deadline:
+                        self.kill()
+                        raise RuntimeError(f"rendering took longer than {timeout:.0f} s and was stopped "
+                                           "(a panel's code may loop forever)") from None
+                    continue
                 if ln is None:
                     self.proc = None
-                    raise RuntimeError("the render worker crashed (see ~/Library/Logs/fignimble.log)")
+                    raise RuntimeError("the render worker crashed (see the engine log)")
                 msg = json.loads(ln)
                 if msg.get("id") != req["id"]:
                     continue
@@ -185,7 +234,7 @@ class Plan:
 
 
 class Session:
-    def __init__(self, project: str, python: str | None = None):
+    def __init__(self, project: str, python: str | None = None, manage_agent_files: bool = True):
         self.project = Path(project).resolve()
         if not self.project.is_dir():
             raise FileNotFoundError(f"no folder {self.project}")
@@ -194,20 +243,30 @@ class Session:
         self.worker = WorkerProc(python or sys.executable)
         self.history: list[dict] = []
         self.redo: list[dict] = []
-        self.renders: dict[str, tuple] = {}            # figure -> (fingerprint, pxPerMM, result)
+        self.renders: dict[str, tuple] = {}            # figure -> (fingerprint, pxPerMM, result, dark, preview)
         self.render_lock = threading.Lock()
         self.edit_lock = threading.RLock()
         self.on_event = None
         self.closed = False
         self.current: str | None = None
         self.dark = False                              # the editor shows the figures' dark versions
+        self._ctx = threading.local()                   # the request's CancelToken, set by the RPC layer
         self._sig = self.fingerprint()
-        self.agent_files = templates.write_agent_files(self.project)
+        self.agent_files = templates.write_agent_files(self.project) if manage_agent_files else []
         threading.Thread(target=self._watch, daemon=True).start()
+
+    def bind(self, token: CancelToken | None):
+        """The RPC layer's cancellation flag for the request this thread is running."""
+        self._ctx.cancel = token
+
+    @property
+    def cancel(self) -> CancelToken | None:
+        return getattr(self._ctx, "cancel", None)
 
     def close(self):
         self.closed = True
-        templates.remove_agent_files(self.project, self.agent_files)
+        if self.agent_files:
+            templates.remove_agent_files(self.project, self.agent_files)
         self.worker.close()
 
     def emit(self, ev: dict):
@@ -296,19 +355,22 @@ class Session:
 
     # --- rendering ---
 
-    def render(self, name: str, px: float | None = None, force: bool = False, dark: bool | None = None) -> dict:
+    def render(self, name: str, px: float | None = None, force: bool = False, dark: bool | None = None,
+               preview: bool = False) -> dict:
         """A figure's render, from the cache when nothing changed. `dark`: its dark version (default: the version
-        the editor shows)."""
+        the editor shows). `preview`: also write a PNG of the whole figure."""
         px = float(px or 12.0)
         dark = self.dark if dark is None else bool(dark)
         with self.render_lock:
             sig = self.fingerprint()
             got = self.renders.get(name)
-            if got and not force and got[0] == sig and got[1] == px and got[2].get("dark", False) == dark:
+            if (got and not force and got[0] == sig and got[1] == px and got[2].get("dark", False) == dark
+                    and got[3] == bool(preview)):
                 return got[2]
             res = self.worker.request({"cmd": "render", "project": str(self.project), "cache": str(self.cache),
-                                       "file": self.figure_file(name), "pxPerMM": px, "dark": dark})
-            self.renders[name] = (sig, px, res)
+                                       "file": self.figure_file(name), "pxPerMM": px, "dark": dark,
+                                       "preview": bool(preview)}, cancel=self.cancel)
+            self.renders[name] = (sig, px, res, dark, bool(preview))
             return res
 
     def restart_renderer(self):
@@ -335,14 +397,18 @@ class Session:
         self.current = a["name"]
         if "dark" in a:
             self.dark = bool(a["dark"])
-        return self.render(a["name"], a.get("pxPerMM"))
+        return self.render(a["name"], a.get("pxPerMM"), preview=bool(a.get("preview")))
 
     # --- undo ---
 
     def _write(self, texts: dict[str, tuple[str, str]], label: str):
+        for path, (before, _after) in texts.items():
+            current = Path(path).read_text(encoding="utf-8") if Path(path).exists() else ""
+            if current != before:
+                raise EditError(f"{Path(path).name} changed since this edit was prepared; nothing was changed")
         written = {}
         for path, (before, after) in texts.items():
-            Path(path).write_text(after, encoding="utf-8")
+            _atomic_write(Path(path), after)
             written[path] = (before.encode(), after.encode())
         if written:
             self.history.append({"label": label, "files": written})
@@ -386,46 +452,52 @@ class Session:
         with self.edit_lock:
             if not self.history:
                 return {"ok": False, "error": "nothing to undo"}
-            e = self.history.pop()
+            e = self.history[-1]                        # keep it until the restore is known to work
             try:
                 self._restore(e["files"], 0)
             except UndoConflict as exc:
                 return {"ok": False, "error": f"Can't undo {e['label']}: {', '.join(exc.args[0])} changed since on the "
                                               "same lines (an agent or another editor), so it was left as it is."}
+            self.history.pop()
             self.redo.append(e)
-            return {"ok": True, "label": e["label"], **self._after(a.get("figure"), a.get("pxPerMM"))}
+            return {"ok": True, "label": e["label"], **self._after(a.get("figure"), a.get("pxPerMM"),
+                                                                   preview=bool(a.get("preview")))}
 
     def undo_to(self, a: dict) -> dict:
         """Undo until `n` steps of history are left (redo, the other way)."""
         n = int(a["n"])
         last = {}
         while len(self.history) > n:
-            last = self.undo({"figure": None})
+            last = self.undo({"figure": None, "preview": a.get("preview")})
             if not last.get("ok"):
                 return {**last, **self._after(a.get("figure"), a.get("pxPerMM"))}
         while len(self.history) < n and self.redo:
-            last = self.redo_({"figure": None})
+            last = self.redo_({"figure": None, "preview": a.get("preview")})
             if not last.get("ok"):
                 return {**last, **self._after(a.get("figure"), a.get("pxPerMM"))}
-        return {"ok": True, **self._after(a.get("figure"), a.get("pxPerMM"))}
+        return {"ok": True, **self._after(a.get("figure"), a.get("pxPerMM"), preview=bool(a.get("preview")))}
 
     def redo_(self, a: dict) -> dict:
         with self.edit_lock:
             if not self.redo:
                 return {"ok": False, "error": "nothing to redo"}
-            e = self.redo.pop()
+            e = self.redo[-1]
             try:
                 self._restore(e["files"], 1)
             except UndoConflict as exc:
                 return {"ok": False, "error": f"Can't redo {e['label']}: {', '.join(exc.args[0])} changed since."}
+            self.redo.pop()
             self.history.append(e)
-            return {"ok": True, "label": e["label"], **self._after(a.get("figure"), a.get("pxPerMM"))}
+            return {"ok": True, "label": e["label"], **self._after(a.get("figure"), a.get("pxPerMM"),
+                                                                   preview=bool(a.get("preview")))}
 
-    def _after(self, name: str | None, px=None, select_lines: dict | None = None) -> dict:
+    def _after(self, name: str | None, px=None, select_lines: dict | None = None, preview: bool = False) -> dict:
         if not name:
             return {}
         try:
-            fig = self.render(name, px)
+            fig = self.render(name, px, preview=preview)
+        except Cancelled:
+            raise
         except Exception as exc:                         # noqa: BLE001
             return {"renderError": str(exc)}
         out = {"figure": fig}
@@ -441,15 +513,21 @@ class Session:
     # --- editing source directly ---
 
     def write_source(self, a: dict) -> dict:
-        """The code editor saved a file."""
+        """The code editor saved a file. `expectedRevision` (when present) must match the file on disk; null means
+        the file must not exist yet."""
         path = str(Path(a["file"]).resolve())
         if not path.startswith(str(self.project) + os.sep):
             return {"ok": False, "error": "that file is not in the project"}
         with self.edit_lock:
+            if "expectedRevision" in a:
+                want = a["expectedRevision"]
+                have = _revision(Path(path))
+                if want != have:
+                    return {"ok": False, "error": "STALE_REVISION: the file changed since it was read; reload it first"}
             before = Path(path).read_text(encoding="utf-8") if Path(path).exists() else ""
             if before != a["text"]:
                 self._write({path: (before, a["text"])}, f"Edit {Path(path).name}")
-            return {"ok": True, **self._after(a.get("figure"), a.get("pxPerMM"))}
+            return {"ok": True, **self._after(a.get("figure"), a.get("pxPerMM"), preview=bool(a.get("preview")))}
 
     # --- canvas edits ---
 
@@ -464,12 +542,12 @@ class Session:
             try:
                 label = getattr(self, f"_op_{op}")(plan, data, a)
                 texts = plan.texts()
+                made = [Path(p) for p in plan.new_files + list(a.get("_new_files") or [])]
+                if not texts:
+                    return {"ok": True, "unchanged": True, "figure": data}
+                self._write(texts, label)
             except (EditError, KeyError, ValueError) as exc:
                 return {"ok": False, "error": str(exc).strip("'\"")}
-            made = [Path(p) for p in plan.new_files + list(a.get("_new_files") or [])]
-            if not texts:
-                return {"ok": True, "unchanged": True, "figure": data}
-            self._write(texts, label)
             for p in made:                              # undo takes them away again, redo brings them back
                 if p.exists():
                     self.history[-1]["files"][str(p)] = (None, p.read_bytes())
@@ -487,14 +565,14 @@ class Session:
                     for path, (before, after) in extra["files"].items():
                         old = self.history[-1]["files"].get(path)
                         self.history[-1]["files"][path] = (old[0] if old else before, after)
-            res = {"ok": True, **self._after(name, a.get("pxPerMM"), lines or None)}
+            res = {"ok": True, **self._after(name, a.get("pxPerMM"), lines or None, preview=bool(a.get("preview")))}
             fig = res.get("figure", {})
             if fig.get("error"):
                 # the edit broke the figure (it shouldn't): take it back
                 e = self.history.pop()
                 self._restore(e["files"], 0)
                 return {"ok": False, "error": "that edit made the figure fail, so it was undone:\n" + fig["error"],
-                        **self._after(name, a.get("pxPerMM"))}
+                        **self._after(name, a.get("pxPerMM"), preview=bool(a.get("preview")))}
             return res
 
     # helpers
@@ -1686,6 +1764,8 @@ class Session:
 
     def new_figure(self, a: dict) -> dict:
         name = a.get("name") or "fig"
+        if a.get("strict") and (self.project / f"{name}.py").exists():
+            return {"ok": False, "error": f"ALREADY_EXISTS: there is already a figure {name}"}
         base, n = name, 1
         while (self.project / f"{name}.py").exists():
             n += 1
@@ -1693,11 +1773,11 @@ class Session:
         if not name.isidentifier():
             return {"ok": False, "error": f"{name} can't be a figure name: use letters, digits and _"}
         if not (self.project / "style.py").exists():
-            (self.project / "style.py").write_text(templates.style_py(a.get("journal")), encoding="utf-8")
+            _atomic_write(self.project / "style.py", templates.style_py(a.get("journal")))
         text = templates.figure_py(float(a.get("width", 183)), float(a.get("height", 120)))
         path = self.project / f"{name}.py"
         with self.edit_lock:
-            path.write_text(text, encoding="utf-8")
+            _atomic_write(path, text)
             self.history.append({"label": "New Figure", "files": {str(path): (None, text.encode())}})
             self.redo.clear()
             self._sig = self.fingerprint()
@@ -1893,7 +1973,8 @@ class Session:
                                         "file": self.figure_file(a["figure"]), "path": a["path"],
                                         "format": a.get("format"), "dpi": a.get("dpi", 600),
                                         "dark": bool(a.get("dark")), "cmyk": bool(a.get("cmyk")),
-                                        "outline": bool(a.get("outline")), "journal": a.get("journal")}, timeout=600)
+                                        "outline": bool(a.get("outline")), "journal": a.get("journal")},
+                                       timeout=600, cancel=self.cancel)
 
 
 def _cell(c: str):

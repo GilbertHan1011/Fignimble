@@ -1,0 +1,27 @@
+{
+  "plugin": "fignimble",
+  "version": "0.1.16",
+  "packageFiles": [
+    "plugin.json",
+    "adapter.py",
+    "engine_client.py",
+    "tools.schema.json",
+    "probe.py",
+    "README.md",
+    "INSTALL.md"
+  ],
+  "packageDirs": [
+    "bin",
+    "web",
+    "skills"
+  ],
+  "sdkFile": "gewu_plugin.py",
+  "sdkDestination": "lib/gewu_plugin.py",
+  "buildInputs": [
+    "fignimble engine",
+    "matplotlib",
+    "pymupdf",
+    "pillow",
+    "numpy"
+  ]
+}

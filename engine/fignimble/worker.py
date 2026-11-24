@@ -32,7 +32,8 @@ def main():
                 if r is None:
                     r = renderers[key] = Renderer(req["project"], req.get("cache"))
                 if cmd == "render":
-                    res = r.render(req["file"], px_per_mm=req.get("pxPerMM", 12.0), dark=bool(req.get("dark")))
+                    res = r.render(req["file"], px_per_mm=req.get("pxPerMM", 12.0), dark=bool(req.get("dark")),
+                                   preview=bool(req.get("preview")))
                 elif cmd == "export":
                     res = r.export(req["file"], req["path"], req.get("format"), dpi=int(req.get("dpi", 600)),
                                    dark=bool(req.get("dark")), cmyk=bool(req.get("cmyk")),
